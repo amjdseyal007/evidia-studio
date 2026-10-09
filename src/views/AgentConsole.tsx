@@ -102,6 +102,8 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
     }
   }
 
+  const agentSvc = store.agentServices[tenantId] ?? {};
+  const agentOn = (name: string) => agentSvc[name] !== false;
   const canRun = can(role, 'agents:run');
 
   return (
@@ -133,7 +135,9 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
                 ))}
               </div>
               <div style={{ marginTop: 12 }}>
-                {canRun ? (
+                {!agentOn(a.name) ? (
+                  <Pill tone="neutral" testId={`agent-disabled-${a.name}`}>Disabled for this tenant</Pill>
+                ) : canRun ? (
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"

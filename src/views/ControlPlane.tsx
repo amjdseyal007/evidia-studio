@@ -4,6 +4,7 @@ import { useStore } from '../lib/store';
 import { can } from '../lib/permissions';
 import type { Role } from '../lib/permissions';
 import { ConfirmDialog, DataTable, Meter, Modal, Pill, SectionTitle, fmtDate, fmtNum, toneForStatus, useToasts, type Column } from '../components/ui';
+import ServiceCatalog from '../components/ServiceCatalog';
 
 type TenantRow = {
   tenant_id: string;
@@ -28,6 +29,22 @@ type UsageRow = {
   model_id: string | null;
   line_total_usd: number | null;
   priced: boolean;
+  raw: UsageRecord;
+};
+
+function unitPriceLabel(rec: UsageRecord): string {
+  if (rec.input_price_per_1m_usd != null) {
+    return `$${rec.input_price_per_1m_usd}/1M input tok · $${rec.output_price_per_1m_usd}/1M output tok`;
+  }
+  if (rec.unit_price_ref) return rec.unit_price_ref;
+  return '—';
+}
+
+const SERVICE_LABEL_BY_EVENT: Record<UsageRecord['event_type'], string> = {
+  agent_invocation: 'Agent Suite',
+  ontology_query: 'Ontology & Semantic Layer',
+  deid_run: 'De-identification Engine',
+  batch_job: 'Data Pipeline (Batch)',
 };
 
 const REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1'] as const;
@@ -42,11 +59,11 @@ function suggestSlug(name: string): string {
   return slug.slice(0, 32);
 }
 
-export default function ControlPlane({ actor, role }: { actor: string; role: Role }) {
+export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { tenantId?: string; actor: string; role: Role }) {
   const store = useStore();
   const { push } = useToasts();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => tenantIdProp ?? null);
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [provName, setProvName] = useState('');
   const [provTenantId, setProvTenantId] = useState('');
@@ -255,6 +272,7 @@ export default function ControlPlane({ actor, role }: { actor: string; role: Rol
     model_id: r.model_id,
     line_total_usd: r.line_total_usd,
     priced: r.priced,
+    raw: r,
   }));
 
   const usageColumns: Array<Column<UsageRow>> = [
@@ -262,9 +280,32 @@ export default function ControlPlane({ actor, role }: { actor: string; role: Rol
     { key: 'study', label: 'Study', sortValue: (r) => r.study_id ?? '', render: (r) => (r.study_id ? <span className="mono">{r.study_id}</span> : '—') },
     { key: 'qty', label: 'Quantity', sortValue: (r) => r.quantity, render: (r) => `${fmtNum(r.quantity)} ${r.unit}` },
     { key: 'model', label: 'Model', render: (r) => (r.model_id ? <span className="mono">{r.model_id}</span> : '—') },
+    { key: 'price', label: 'Unit price (demo)', render: (r) => unitPriceLabel(r.raw) },
     { key: 'total', label: 'Line total', sortValue: (r) => r.line_total_usd ?? -1, render: (r) => (r.priced && r.line_total_usd != null ? `$${r.line_total_usd.toFixed(3)}` : '—') },
     { key: 'priced', label: 'Priced', sortValue: (r) => (r.priced ? 'priced' : 'unpriced'), render: (r) => <Pill tone={r.priced ? 'ok' : 'warn'}>{r.priced ? 'priced' : 'unpriced'}</Pill> },
   ];
+
+  const byServiceGroups = (() => {
+    const groups = new Map<string, UsageRecord[]>();
+    for (const rec of usageRecords) {
+      const existing = groups.get(rec.event_type);
+      if (existing) existing.push(rec);
+      else groups.set(rec.event_type, [rec]);
+    }
+    return [...groups.entries()].map(([event_type, records]) => {
+      const firstPriced = records.find((r) => r.priced);
+      const pricedTotals = records.filter((r) => r.priced && r.line_total_usd != null);
+      const lineTotal = pricedTotals.length > 0 ? pricedTotals.reduce((sum, r) => sum + (r.line_total_usd ?? 0), 0) : null;
+      return {
+        event_type,
+        service: SERVICE_LABEL_BY_EVENT[event_type as UsageRecord['event_type']] ?? event_type,
+        quantity: records.reduce((sum, r) => sum + r.quantity, 0),
+        unit: records[0]?.unit ?? '',
+        unitPrice: firstPriced ? unitPriceLabel(firstPriced) : '— (unpriced)',
+        lineTotal,
+      };
+    });
+  })();
 
   return (
     <section>
@@ -314,6 +355,26 @@ export default function ControlPlane({ actor, role }: { actor: string; role: Rol
         </div>
       ) : null}
 
+      <div className="card" style={{ marginBottom: 14 }}>
+        <h3>Audit log</h3>
+        <p className="muted">Every simulated action in this console is recorded here (actor, tenant, target, result). Filter via the table search.</p>
+        <DataTable
+          rows={store.audit.map((a) => ({ ...a }))}
+          columns={[
+            { key: 'at', label: 'Time', sortValue: (r) => r.at, render: (r) => fmtDate(r.at) },
+            { key: 'actor', label: 'Actor', sortValue: (r) => r.actor, render: (r) => r.actor },
+            { key: 'tenant', label: 'Tenant', sortValue: (r) => r.tenant_id, render: (r) => <span className="mono">{r.tenant_id}</span> },
+            { key: 'action', label: 'Action', sortValue: (r) => r.action, render: (r) => <span className="mono">{r.action}</span> },
+            { key: 'target', label: 'Target', sortValue: (r) => r.target, render: (r) => <span className="mono">{r.target}</span> },
+            { key: 'detail', label: 'Detail', render: (r) => r.detail },
+            { key: 'result', label: 'Result', sortValue: (r) => r.result, render: (r) => <Pill tone={r.result === 'success' ? 'ok' : r.result === 'blocked' ? 'err' : 'info'}>{r.result}</Pill> },
+          ]}
+          rowKey={(r) => r.id}
+          testId="audit-log"
+          emptyText="No audit entries yet."
+        />
+      </div>
+
       <SectionTitle title="Environments" sub="CDK synthesis status per environment. Nothing is deployed yet." />
       <div className="card-grid">
         {store.environments.map((env) => (
@@ -352,6 +413,9 @@ export default function ControlPlane({ actor, role }: { actor: string; role: Rol
           </article>
         ))}
       </div>
+
+      <SectionTitle title="Tenant services" sub="Per-tenant entitlements for the selected tenant above. Toggles gate navigation and actions immediately; every change is audited with actor + timestamp." />
+      {selected ? <div style={{ marginBottom: 14 }}><ServiceCatalog tenantId={selected.tenant_id} actor={actor} canManage={can(role, 'services:manage')} /></div> : null}
 
       <SectionTitle title="Usage & billing" sub="Per-tenant invoice report and raw usage records (fixture pricing)." />
       {!billingAllowed ? (
@@ -393,6 +457,31 @@ export default function ControlPlane({ actor, role }: { actor: string; role: Rol
                   <div className="kpi-value">{fmtNum(invoice.totals.unpriced_record_count)}</div>
                   <div className="muted">unpriced records — quantities shown honestly, no invented prices</div>
                 </div>
+              </div>
+
+              <h3>By service</h3>
+              <p className="muted">Demo prices — fixture pricing ({invoice.pricing_version}), shown in-product for illustration; not a rate card.</p>
+              <div data-testid="billing-by-service">
+                {usageRecords.length === 0 ? (
+                  <p className="muted">No usage records for this tenant yet.</p>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead><tr><th>Service</th><th>Event type</th><th>Quantity</th><th>Unit price (demo)</th><th>Line total</th></tr></thead>
+                      <tbody>
+                        {byServiceGroups.map((g) => (
+                          <tr key={g.event_type}>
+                            <td>{g.service}</td>
+                            <td>{g.event_type}</td>
+                            <td>{`${fmtNum(g.quantity)} ${g.unit}`}</td>
+                            <td>{g.unitPrice}</td>
+                            <td>{g.lineTotal != null ? `$${g.lineTotal.toFixed(3)}` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               <h3>Usage records</h3>

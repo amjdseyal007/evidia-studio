@@ -7,7 +7,7 @@
  * boundary; the UI labels it DEMO wherever role switching appears.
  */
 
-export const ROLES = ['Platform Admin', 'Tenant Admin', 'Data Engineer', 'Biostatistician', 'Auditor'] as const;
+export const ROLES = ['Platform Admin', 'Tenant Admin', 'Delivery Admin', 'Data Engineer', 'Biostatistician', 'Auditor'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PERMISSIONS = [
@@ -37,16 +37,20 @@ export const PERMISSIONS = [
   'users:manage',
   'settings:manage',
   'apikeys:manage',
+  'services:manage',
+  'delivery:view',
+  'support:viewas',
+  'teams:manage',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
-const ALL: Role[] = ['Platform Admin', 'Tenant Admin', 'Data Engineer', 'Biostatistician', 'Auditor'];
+const ALL: Role[] = ['Platform Admin', 'Tenant Admin', 'Delivery Admin', 'Data Engineer', 'Biostatistician', 'Auditor'];
 
 const MATRIX: Record<Permission, Role[]> = {
   'dashboard:view': ALL,
   'pipeline:view': ALL,
   'pipeline:run': ['Platform Admin', 'Tenant Admin', 'Data Engineer'],
-  'connectors:view': ['Platform Admin', 'Tenant Admin', 'Data Engineer', 'Biostatistician'],
+  'connectors:view': ['Platform Admin', 'Tenant Admin', 'Data Engineer', 'Biostatistician', 'Delivery Admin'],
   'connectors:manage': ['Platform Admin', 'Tenant Admin', 'Data Engineer'],
   'ontology:view': ALL,
   'ontology:manage': ['Platform Admin', 'Tenant Admin', 'Data Engineer', 'Biostatistician'],
@@ -60,15 +64,19 @@ const MATRIX: Record<Permission, Role[]> = {
   'agents:run': ['Platform Admin', 'Tenant Admin', 'Biostatistician'],
   'evidence:view': ALL,
   'evidence:sign': ['Platform Admin', 'Biostatistician'],
-  'controlplane:view': ['Platform Admin', 'Tenant Admin'],
+  'controlplane:view': ['Platform Admin', 'Tenant Admin', 'Delivery Admin'],
   'audit:view': ALL,
   'tenants:provision': ['Platform Admin'],
   'tenants:offboard': ['Platform Admin'],
-  'billing:view': ['Platform Admin', 'Tenant Admin', 'Biostatistician', 'Auditor'],
-  'users:view': ['Platform Admin', 'Tenant Admin', 'Auditor'],
+  'billing:view': ['Platform Admin', 'Tenant Admin', 'Biostatistician', 'Auditor', 'Delivery Admin'],
+  'users:view': ['Platform Admin', 'Tenant Admin', 'Auditor', 'Delivery Admin'],
   'users:manage': ['Platform Admin', 'Tenant Admin'],
   'settings:manage': ['Platform Admin', 'Tenant Admin'],
   'apikeys:manage': ['Platform Admin', 'Tenant Admin', 'Data Engineer'],
+  'services:manage': ['Tenant Admin', 'Delivery Admin'],
+  'delivery:view': ['Platform Admin', 'Delivery Admin'],
+  'support:viewas': ['Platform Admin', 'Delivery Admin'],
+  'teams:manage': ['Platform Admin', 'Tenant Admin'],
 };
 
 export function can(role: Role | null | undefined, permission: Permission): boolean {
@@ -108,4 +116,8 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   'users:manage': 'Manage users',
   'settings:manage': 'Manage tenant settings',
   'apikeys:manage': 'Manage API keys',
+  'services:manage': 'Enable/disable tenant services',
+  'delivery:view': 'View delivery engagements',
+  'support:viewas': 'Support "view as tenant" sessions',
+  'teams:manage': 'Manage teams',
 };

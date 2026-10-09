@@ -31,6 +31,10 @@ import { agentFixtures, agentRunFixtures } from '../fixtures/agents';
 import { atlasExportFixture, cohortCountFixture, sampleCohortDefinition } from '../fixtures/cohort';
 import { dqFixtureByTenant, invoiceReportFixture, studyFixtures, usageRecordFixtures } from '../fixtures/dashboard';
 import { evidenceFixture } from '../fixtures/evidence';
+import type { EngagementHealth, EngagementPhase, EngagementRecord } from '../fixtures/engagements';
+import { defaultAgentStates, defaultServiceStates } from '../fixtures/services';
+import type { ServiceKey, TenantServiceStates } from '../fixtures/services';
+import type { TeamRecord } from '../fixtures/teams';
 import { tenantFixtures } from '../fixtures/tenants';
 import { classParentSeed, classSynonymSeed, mcpToolSeed, ontologyClassSeed, ontologyExtensionClassSeed, ontologyNamespaceSeed, ontologyPropertySeed, pipelineStages, semanticSearchOntology } from '../fixtures/ontology';
 import type { ChangeProposal, ConceptMapping, OntologyVersion, SemanticHit } from '../fixtures/ontology';
@@ -50,6 +54,8 @@ export type {
   ActivityItem, ApiKeyRecord, ConnectorRecord, ControlTenant, DatasetRecord,
   EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
   ServiceHealth, UserRecord, AuditEntry, SavedCohort, ConnectorCapability,
+  ServiceKey, TenantServiceStates, TeamRecord, EngagementRecord,
+  EngagementPhase, EngagementHealth,
 };
 
 // ---------------------------------------------------------------------------
@@ -453,9 +459,10 @@ export interface TenantAdminEntry {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Enterprise console extension (control plane, pipeline, connectors,
-// users, products, ontology). Mock implementations delegate to the
-// stateful demo store (src/lib/store.ts); live implementations fail
-// loudly (endpoints not mounted on studio/api yet).
+// users, products, ontology, tenant services, teams, delivery & support).
+// Mock implementations delegate to the stateful demo store
+// (src/lib/store.ts); live implementations fail loudly (endpoints not
+// mounted on studio/api yet).
 // ---------------------------------------------------------------------------
 export interface OntologyBundle {
   classes: typeof ontologyClassSeed;
@@ -532,6 +539,25 @@ export interface StudioApi {
   submitProposal(input: { title: string; kind: ChangeProposal['kind']; detail: string }, tenantId: string, actor: string): Promise<ChangeProposal>;
   semanticSearch(query: string): Promise<SemanticHit[]>;
   signEvidence(tenantId: string, signerName: string, signerId: string, meaning: string): Promise<void>;
+
+  // --- tenant services, teams, delivery & support extension ---
+  getTenantServices(tenantId: string): Promise<TenantServiceStates>;
+  setServiceEnabled(tenantId: string, key: ServiceKey, enabled: boolean, actor: string): Promise<void>;
+  getAgentServices(tenantId: string): Promise<Record<string, boolean>>;
+  setAgentEnabled(tenantId: string, agentName: string, enabled: boolean, actor: string): Promise<void>;
+  listTeams(tenantId?: string): Promise<TeamRecord[]>;
+  createTeam(input: store.CreateTeamInput): Promise<TeamRecord>;
+  deleteTeam(teamId: string, actor: string): Promise<void>;
+  addTeamMember(teamId: string, userId: string, actor: string): Promise<void>;
+  removeTeamMember(teamId: string, userId: string, actor: string): Promise<void>;
+  setTeamRole(teamId: string, role: Role, actor: string): Promise<void>;
+  listEngagements(): Promise<EngagementRecord[]>;
+  setEngagementPhase(tenantId: string, phase: EngagementPhase, actor: string): Promise<void>;
+  setEngagementHealth(tenantId: string, health: EngagementHealth, actor: string): Promise<void>;
+  toggleEngagementMilestone(tenantId: string, milestone: string, actor: string): Promise<void>;
+  startSupportSession(tenantId: string, actor: string): Promise<void>;
+  endSupportSession(tenantId: string, actor: string): Promise<void>;
+  activateBreakGlass(tenantId: string, actor: string, reason: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +774,60 @@ export function createMockApi(): StudioApi {
     async signEvidence(tenantId, signerName, signerId, meaning) {
       store.signEvidence(tenantId, signerName, signerId, meaning);
       return tick(undefined);
+    },
+
+    // --- tenant services, teams, delivery & support (demo store backed) ---
+    async getTenantServices(tenantId) {
+      return tick(store.getState().tenantServices[tenantId] ?? defaultServiceStates());
+    },
+    async setServiceEnabled(tenantId, key, enabled, actor) {
+      store.setServiceEnabled(tenantId, key, enabled, actor); return tick(undefined);
+    },
+    async getAgentServices(tenantId) {
+      return tick(store.getState().agentServices[tenantId] ?? defaultAgentStates());
+    },
+    async setAgentEnabled(tenantId, agentName, enabled, actor) {
+      store.setAgentEnabled(tenantId, agentName, enabled, actor); return tick(undefined);
+    },
+    async listTeams(tenantId) {
+      const all = store.getState().teams;
+      return tick(tenantId ? all.filter((t) => t.tenant_id === tenantId) : all);
+    },
+    async createTeam(input) {
+      return tick(store.createTeam(input));
+    },
+    async deleteTeam(teamId, actor) {
+      store.deleteTeam(teamId, actor); return tick(undefined);
+    },
+    async addTeamMember(teamId, userId, actor) {
+      store.addTeamMember(teamId, userId, actor); return tick(undefined);
+    },
+    async removeTeamMember(teamId, userId, actor) {
+      store.removeTeamMember(teamId, userId, actor); return tick(undefined);
+    },
+    async setTeamRole(teamId, role, actor) {
+      store.setTeamRole(teamId, role, actor); return tick(undefined);
+    },
+    async listEngagements() {
+      return tick(store.getState().engagements);
+    },
+    async setEngagementPhase(tenantId, phase, actor) {
+      store.setEngagementPhase(tenantId, phase, actor); return tick(undefined);
+    },
+    async setEngagementHealth(tenantId, health, actor) {
+      store.setEngagementHealth(tenantId, health, actor); return tick(undefined);
+    },
+    async toggleEngagementMilestone(tenantId, milestone, actor) {
+      store.toggleEngagementMilestone(tenantId, milestone, actor); return tick(undefined);
+    },
+    async startSupportSession(tenantId, actor) {
+      store.startSupportSession(tenantId, actor); return tick(undefined);
+    },
+    async endSupportSession(tenantId, actor) {
+      store.endSupportSession(tenantId, actor); return tick(undefined);
+    },
+    async activateBreakGlass(tenantId, actor, reason) {
+      store.activateBreakGlass(tenantId, actor, reason); return tick(undefined);
     },
   };
 }
@@ -1020,6 +1100,11 @@ const ENTERPRISE_LIVE_METHODS = [
   'markAllNotificationsRead', 'listActivity', 'getOntology',
   'listConceptMappings', 'mapCodes', 'reviewMapping', 'decideProposal',
   'submitProposal', 'semanticSearch', 'signEvidence',
+  'getTenantServices', 'setServiceEnabled', 'getAgentServices',
+  'setAgentEnabled', 'listTeams', 'createTeam', 'deleteTeam',
+  'addTeamMember', 'removeTeamMember', 'setTeamRole', 'listEngagements',
+  'setEngagementPhase', 'setEngagementHealth', 'toggleEngagementMilestone',
+  'startSupportSession', 'endSupportSession', 'activateBreakGlass',
 ] as const;
 
 type EnterpriseNotMounted = Pick<StudioApi, (typeof ENTERPRISE_LIVE_METHODS)[number]>;

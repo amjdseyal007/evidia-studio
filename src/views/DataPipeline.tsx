@@ -5,10 +5,11 @@
  * goes through the API seam (`api`) so mock and live clients stay
  * interchangeable. RBAC gates use `can(role, …)` from lib/permissions.
  */
-import { useMemo, useState, type FormEvent } from 'react';
-import { api, type DatasetRecord, type PipelineRun } from '../lib/api';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { api, type DatasetRecord, type PipelineRun, type QualityResult } from '../lib/api';
 import { useStore } from '../lib/store';
 import { can, type Role } from '../lib/permissions';
+import { isServiceEnabled } from '../fixtures/services';
 import {
   DataTable, EmptyState, Modal, Pill, SectionTitle,
   fmtDate, fmtNum, toneForStatus, useToasts, type Column, type Tone,
@@ -62,8 +63,19 @@ export default function DataPipeline({
   const [startingId, setStartingId] = useState<string | null>(null);
   const [datasetFilter, setDatasetFilter] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [dq, setDq] = useState<QualityResult | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getDqResult(tenantId).then((r) => { if (!cancelled) setDq(r); }).catch(() => { /* DQ panel is additive */ });
+    return () => { cancelled = true; };
+  }, [tenantId]);
 
   const canRun = can(role, 'pipeline:run');
+  const svcStates = store.tenantServices[tenantId];
+  const deidOff = svcStates ? !isServiceEnabled(svcStates, 'deid') : false;
+  const dqOff = svcStates ? !isServiceEnabled(svcStates, 'dq') : false;
+  const runBlocked = deidOff || dqOff;
 
   // Spread into fresh object types — DataTable requires an index signature,
   // which fixture interfaces do not carry.
@@ -95,6 +107,10 @@ export default function DataPipeline({
   const filterDataset = datasets.find((d) => d.dataset_id === datasetFilter) ?? null;
 
   async function onRunPipeline(ds: DatasetRow) {
+    if (runBlocked) {
+      push({ title: 'Run blocked', body: 'De-identification / Data Quality service is disabled for this tenant.', tone: 'err' });
+      return;
+    }
     setStartingId(ds.dataset_id);
     try {
       const run = await api.startPipelineRun(ds.dataset_id, actor);
@@ -158,8 +174,8 @@ export default function DataPipeline({
         <div className="row">
           <button
             type="button" className="btn btn-primary btn-sm"
-            disabled={!canRun || startingId === r.dataset_id}
-            title={canRun ? 'Start a new pipeline run for this dataset' : 'Requires the pipeline:run permission'}
+            disabled={!canRun || runBlocked || startingId === r.dataset_id}
+            title={runBlocked ? 'Blocked: a required service is disabled for this tenant' : canRun ? 'Start a new pipeline run for this dataset' : 'Requires the pipeline:run permission'}
             onClick={() => void onRunPipeline(r)}
           >
             {startingId === r.dataset_id ? 'Starting…' : 'Run pipeline'}
@@ -251,6 +267,12 @@ export default function DataPipeline({
           <div className="muted">of {fmtNum(runs.length)} total run{runs.length === 1 ? '' : 's'}</div>
         </div>
       </div>
+
+      {runBlocked ? (
+        <div className="card" data-testid="pipeline-service-notice" style={{ marginBottom: 14 }}>
+          ⚠ {[deidOff && 'De-identification Engine', dqOff && 'Data Quality Scoring'].filter(Boolean).join(' and ')} disabled for this tenant — pipeline runs are blocked until an admin re-enables the service in Control Plane → Tenant services.
+        </div>
+      ) : null}
 
       <h3 style={{ margin: '18px 0 10px' }}>Dataset catalog</h3>
       {datasets.length === 0 ? (
@@ -350,6 +372,62 @@ export default function DataPipeline({
           ) : null}
         </div>
       ) : null}
+
+      <div className="card" style={{ marginTop: 14 }} data-testid="pipeline-schedules">
+        <h3>Schedules</h3>
+        <p className="muted">Recurring refresh cadences per dataset (demo schedules — no live scheduler is attached).</p>
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Dataset</th><th>Cadence</th><th>Next run</th><th>Status</th></tr></thead>
+            <tbody>
+              {datasets.map((ds, i) => (
+                <tr key={ds.dataset_id}>
+                  <td>{ds.name}</td>
+                  <td>{['Daily 06:00 UTC', 'Weekly Mon 05:00 UTC', 'On demand'][i % 3]}</td>
+                  <td>{i % 3 === 2 ? '—' : fmtDate(new Date(Date.now() + (i + 1) * 36e5).toISOString())}</td>
+                  <td><Pill tone={i % 3 === 2 ? 'neutral' : 'ok'}>{i % 3 === 2 ? 'manual' : 'active'}</Pill></td>
+                </tr>
+              ))}
+              {datasets.length === 0 && <tr><td colSpan={4}><div className="empty-state">No datasets to schedule.</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }} data-testid="dq-panel">
+        <div className="section-head">
+          <div>
+            <h3>Data quality — 55-check OMOP suite</h3>
+            <p className="muted">Latest scored run for this tenant. Failed checks block gold publish; every score carries provenance.</p>
+          </div>
+          {dq ? <Pill tone={dq.score >= 85 ? 'ok' : dq.score >= 70 ? 'warn' : 'err'}>{dq.score.toFixed(1)} / 100</Pill> : null}
+        </div>
+        {dq ? (
+          <>
+            <p className="muted">
+              Run <span className="mono">{dq.run_id}</span> · {dq.summary.passed} pass · {dq.summary.warned} warn · {dq.summary.failed} fail
+              of {dq.summary.total_checks} checks · {fmtNum(dq.summary.total_rows)} rows · fingerprint <span className="mono">{dq.provenance.dataset_fingerprint.slice(0, 12)}…</span>
+            </p>
+            <DataTable
+              rows={dq.checks.map((c) => ({ ...c }))}
+              columns={[
+                { key: 'check_id', label: 'Check', render: (r) => <span className="mono">{r.check_id}</span>, sortValue: (r) => r.check_id },
+                { key: 'family', label: 'Family', render: (r) => r.family, sortValue: (r) => r.family },
+                { key: 'table', label: 'Table', render: (r) => r.table, sortValue: (r) => r.table },
+                { key: 'status', label: 'Status', render: (r) => <Pill tone={r.status === 'pass' ? 'ok' : r.status === 'warn' ? 'warn' : 'err'}>{r.status}</Pill>, sortValue: (r) => r.status },
+                { key: 'offending', label: 'Offending', render: (r) => `${fmtNum(r.offending_count)} (${(r.offending_rate * 100).toFixed(3)}%)`, sortValue: (r) => r.offending_count },
+                { key: 'description', label: 'Description', render: (r) => r.description },
+              ]}
+              rowKey={(r) => r.check_id}
+              pageSize={10}
+              testId="dq-checks"
+              emptyText="No check rows in the latest run."
+            />
+          </>
+        ) : (
+          <p className="muted">Loading DQ results…</p>
+        )}
+      </div>
 
       {showRegister ? (
         <Modal title="Register dataset" onClose={() => setShowRegister(false)} testId="register-dataset-modal">

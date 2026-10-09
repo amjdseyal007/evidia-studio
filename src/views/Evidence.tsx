@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, type EvidencePackage, type SignatureRecord } from '../lib/api';
 import { recordAudit, useStore } from '../lib/store';
 import { can, type Role } from '../lib/permissions';
+import { isServiceEnabled } from '../fixtures/services';
 import { ConfirmDialog, DataTable, Pill, SectionTitle, SkeletonRows, fmtDate, toneForStatus, useToasts, type Column } from '../components/ui';
 
 type TabKey = 'packages' | 'audit' | 'compliance';
@@ -121,6 +122,7 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
   }
 
   function handleSign() {
+    if (part11Off) return;
     if (!selectedPkg) return;
     const last = allSignatures[allSignatures.length - 1];
     const previousHash = last ? last.record_hash : selectedPkg.chain_head_hash;
@@ -154,6 +156,8 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
     push({ title: 'Package signed (demo)', body: `${meaning} · sequence ${seq} appended locally`, tone: 'ok' });
   }
 
+  const states = store.tenantServices[tenantId];
+  const part11Off = states ? !isServiceEnabled(states, 'part11') : false;
   const canSign = can(role, 'evidence:sign');
 
   return (
@@ -242,11 +246,12 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
                       {verifying ? 'Verifying…' : 'Verify chain'}
                     </button>
                     {canSign ? (
-                      <button type="button" className="btn btn-primary" onClick={() => setSignOpen(true)}>Sign package (demo)</button>
+                      <button type="button" className="btn btn-primary" disabled={part11Off} title={part11Off ? 'Part 11 E-Signatures is disabled for this tenant' : undefined} onClick={() => setSignOpen(true)}>Sign package (demo)</button>
                     ) : (
                       <Pill tone="neutral">Signing requires a privileged role</Pill>
                     )}
                   </div>
+                  {part11Off ? <p className="muted" data-testid="part11-disabled-note">Part 11 E-Signatures is disabled for this tenant — signing is unavailable until re-enabled.</p> : null}
                   {verifying && <p className="muted">Recomputing hash chain (demo)…</p>}
                   {verifiedMsg && <p><Pill tone="ok">{verifiedMsg}</Pill></p>}
                   <p className="muted">Local demo signature — real Part 11 signing happens in the DynamoDB hash-chain store at deploy. This demo signature never leaves the browser and is not a Part 11 signature.</p>

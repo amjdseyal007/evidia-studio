@@ -15,9 +15,19 @@ import { sampleCohortDefinition } from '../fixtures/cohort';
 import { invoiceReportFixture, studyFixtures, usageRecordFixtures } from '../fixtures/dashboard';
 import { evidenceFixture } from '../fixtures/evidence';
 import {
+  engagementSeed,
+  type EngagementHealth, type EngagementPhase, type EngagementRecord,
+} from '../fixtures/engagements';
+import {
   changeProposalSeed, conceptMappingSeed, mappingCandidateSeed, ontologyVersionSeed,
   type ChangeProposal, type ConceptMapping, type OntologyVersion,
 } from '../fixtures/ontology';
+import {
+  AGENT_SERVICE_SEED, SERVICE_SEED_STATES,
+  defaultAgentStates, defaultServiceStates, serviceDef,
+  type ServiceKey, type TenantServiceStates,
+} from '../fixtures/services';
+import { teamSeed, type TeamRecord } from '../fixtures/teams';
 import {
   activitySeed,
   apiKeySeed,
@@ -89,6 +99,10 @@ export interface StoreState {
   mappings: ConceptMapping[];
   ontologyVersions: OntologyVersion[];
   proposals: ChangeProposal[];
+  tenantServices: Record<string, TenantServiceStates>;
+  agentServices: Record<string, Record<string, boolean>>;
+  teams: TeamRecord[];
+  engagements: EngagementRecord[];
 }
 
 const now = () => new Date().toISOString();
@@ -143,6 +157,10 @@ function seedState(): StoreState {
     mappings: conceptMappingSeed.map((m) => ({ ...m })),
     ontologyVersions: ontologyVersionSeed.map((v) => ({ ...v })),
     proposals: changeProposalSeed.map((p) => ({ ...p })),
+    tenantServices: Object.fromEntries(Object.entries(SERVICE_SEED_STATES).map(([k, v]) => [k, { ...v }])),
+    agentServices: Object.fromEntries(Object.entries(AGENT_SERVICE_SEED).map(([k, v]) => [k, { ...v }])),
+    teams: teamSeed.map((t) => ({ ...t, member_ids: [...t.member_ids], access_datasets: [...t.access_datasets], access_studies: [...t.access_studies] })),
+    engagements: Object.values(engagementSeed).map((e) => ({ ...e, milestones: [...e.milestones], completed: [...e.completed] })),
   };
 }
 
@@ -203,7 +221,12 @@ export function provisionTenant(input: ProvisionTenantInput): ControlTenant {
     active_studies: 0,
     usage: { datasets: 0, datasets_quota: 25, agent_runs: 0, agent_runs_quota: 2000, storage_gb: 0, storage_quota_gb: 500 },
   };
-  update((s) => ({ ...s, tenants: [...s.tenants, t] }));
+  update((s) => ({
+    ...s,
+    tenants: [...s.tenants, t],
+    tenantServices: { ...s.tenantServices, [input.tenant_id]: defaultServiceStates() },
+    agentServices: { ...s.agentServices, [input.tenant_id]: defaultAgentStates() },
+  }));
   pushAudit({ actor: input.actor, tenant_id: input.tenant_id, action: 'tenant.provision.requested', target: input.tenant_id, detail: `${input.isolation} tenant in ${input.region} (simulated)`, result: 'success' });
   pushActivity('tenant', `Tenant “${input.name}” provisioning started (${input.isolation}, ${input.region})`, input.tenant_id);
   window.setTimeout(() => {
@@ -586,6 +609,137 @@ export function signEvidence(tenant_id: string, signerName: string, signerId: st
   }));
   pushAudit({ actor: signerId, tenant_id, action: 'evidence.signed', target: ev.study_id, detail: `Signature #${seq} (${meaning})`, result: 'success' });
   pushActivity('evidence', `Evidence package ${ev.study_id} signed by ${signerName}`, tenant_id);
+}
+
+// ---------------------------------------------------------------------------
+// Services (per-tenant enablement)
+// ---------------------------------------------------------------------------
+export function setServiceEnabled(tenant_id: string, key: ServiceKey, enabled: boolean, actor: string): void {
+  update((s) => {
+    const current = s.tenantServices[tenant_id] ?? defaultServiceStates();
+    return { ...s, tenantServices: { ...s.tenantServices, [tenant_id]: { ...current, [key]: enabled } } };
+  });
+  pushAudit({ actor, tenant_id, action: enabled ? 'service.enabled' : 'service.disabled', target: key, detail: serviceDef(key).name, result: 'success' });
+}
+export function setAgentEnabled(tenant_id: string, agent_name: string, enabled: boolean, actor: string): void {
+  update((s) => {
+    const current = s.agentServices[tenant_id] ?? defaultAgentStates();
+    return { ...s, agentServices: { ...s.agentServices, [tenant_id]: { ...current, [agent_name]: enabled } } };
+  });
+  pushAudit({ actor, tenant_id, action: enabled ? 'service.agent.enabled' : 'service.agent.disabled', target: agent_name, detail: '', result: 'success' });
+}
+
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+export interface CreateTeamInput {
+  name: string;
+  description: string;
+  role: Role;
+  tenant_id: string;
+  access_datasets: string[];
+  access_studies: string[];
+  actor: string;
+}
+export function createTeam(input: CreateTeamInput): TeamRecord {
+  const team: TeamRecord = {
+    team_id: uid('team'),
+    tenant_id: input.tenant_id,
+    name: input.name,
+    description: input.description,
+    role: input.role,
+    member_ids: [],
+    access_datasets: [...input.access_datasets],
+    access_studies: [...input.access_studies],
+    created_at: now(),
+  };
+  update((s) => ({ ...s, teams: [...s.teams, team] }));
+  pushAudit({ actor: input.actor, tenant_id: input.tenant_id, action: 'team.created', target: team.team_id, detail: team.name, result: 'success' });
+  return team;
+}
+export function deleteTeam(team_id: string, actor: string): void {
+  const team = state.teams.find((x) => x.team_id === team_id);
+  if (!team) return;
+  update((s) => ({ ...s, teams: s.teams.filter((x) => x.team_id !== team_id) }));
+  pushAudit({ actor, tenant_id: team.tenant_id, action: 'team.deleted', target: team_id, detail: team.name, result: 'success' });
+}
+export function addTeamMember(team_id: string, user_id: string, actor: string): void {
+  const team = state.teams.find((x) => x.team_id === team_id);
+  if (!team || team.member_ids.includes(user_id)) return;
+  update((s) => ({
+    ...s,
+    teams: s.teams.map((x) => (x.team_id === team_id ? { ...x, member_ids: [...x.member_ids, user_id] } : x)),
+  }));
+  const user = state.users.find((x) => x.user_id === user_id);
+  pushAudit({ actor, tenant_id: team.tenant_id, action: 'team.member.added', target: user?.email ?? user_id, detail: team.name, result: 'success' });
+}
+export function removeTeamMember(team_id: string, user_id: string, actor: string): void {
+  const team = state.teams.find((x) => x.team_id === team_id);
+  if (!team) return;
+  update((s) => ({
+    ...s,
+    teams: s.teams.map((x) => (x.team_id === team_id ? { ...x, member_ids: x.member_ids.filter((id) => id !== user_id) } : x)),
+  }));
+  const user = state.users.find((x) => x.user_id === user_id);
+  pushAudit({ actor, tenant_id: team.tenant_id, action: 'team.member.removed', target: user?.email ?? user_id, detail: team.name, result: 'success' });
+}
+export function setTeamRole(team_id: string, role: Role, actor: string): void {
+  const team = state.teams.find((x) => x.team_id === team_id);
+  if (!team) return;
+  update((s) => ({
+    ...s,
+    teams: s.teams.map((x) => (x.team_id === team_id ? { ...x, role } : x)),
+  }));
+  pushAudit({ actor, tenant_id: team.tenant_id, action: 'team.role.changed', target: team_id, detail: `New role: ${role}`, result: 'success' });
+}
+
+// ---------------------------------------------------------------------------
+// Delivery engagements & support sessions
+// ---------------------------------------------------------------------------
+export function setEngagementPhase(tenant_id: string, phase: EngagementPhase, actor: string): void {
+  const eng = state.engagements.find((x) => x.tenant_id === tenant_id);
+  if (!eng) return;
+  update((s) => ({
+    ...s,
+    engagements: s.engagements.map((x) => (x.tenant_id === tenant_id ? { ...x, phase, updated_at: now() } : x)),
+  }));
+  pushAudit({ actor, tenant_id, action: 'delivery.phase.changed', target: tenant_id, detail: phase, result: 'success' });
+}
+export function setEngagementHealth(tenant_id: string, health: EngagementHealth, actor: string): void {
+  const eng = state.engagements.find((x) => x.tenant_id === tenant_id);
+  if (!eng) return;
+  update((s) => ({
+    ...s,
+    engagements: s.engagements.map((x) => (x.tenant_id === tenant_id ? { ...x, health, updated_at: now() } : x)),
+  }));
+  pushAudit({ actor, tenant_id, action: 'delivery.health.changed', target: tenant_id, detail: health, result: 'success' });
+}
+export function toggleEngagementMilestone(tenant_id: string, milestone: string, actor: string): void {
+  const eng = state.engagements.find((x) => x.tenant_id === tenant_id);
+  if (!eng) return;
+  const done = eng.completed.includes(milestone);
+  update((s) => ({
+    ...s,
+    engagements: s.engagements.map((x) => (x.tenant_id === tenant_id
+      ? { ...x, completed: done ? x.completed.filter((m) => m !== milestone) : [...x.completed, milestone], updated_at: now() }
+      : x)),
+  }));
+  pushAudit({ actor, tenant_id, action: 'delivery.milestone.updated', target: tenant_id, detail: `${milestone} — ${done ? 'pending' : 'done'}`, result: 'success' });
+}
+export function startSupportSession(tenant_id: string, actor: string): void {
+  pushAudit({ actor, tenant_id, action: 'support.view_as.started', target: tenant_id, detail: 'Audited support session started (view as tenant)', result: 'info' });
+  pushActivity('system', `Support view-as session started for ${tenant_id}`, tenant_id);
+}
+export function endSupportSession(tenant_id: string, actor: string): void {
+  pushAudit({ actor, tenant_id, action: 'support.view_as.ended', target: tenant_id, detail: 'Audited support session ended (view as tenant)', result: 'info' });
+  pushActivity('system', `Support view-as session ended for ${tenant_id}`, tenant_id);
+}
+export function activateBreakGlass(tenant_id: string, actor: string, reason: string): void {
+  pushAudit({ actor, tenant_id, action: 'support.break_glass.activated', target: tenant_id, detail: `BREAK-GLASS elevated access (15 min): ${reason}`, result: 'info' });
+  update((s) => ({
+    ...s,
+    notifications: [{ id: uid('notif'), at: now(), title: 'Break-glass access activated', body: `${actor} activated elevated access on ${tenant_id}: ${reason}`, severity: 'critical' as const, read: false }, ...s.notifications],
+  }));
 }
 
 /** Test hook: reset to the seeded fixture state. */

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, type InvoiceReport, type QualityResult } from '../lib/api';
 import { useStore } from '../lib/store';
+import { isServiceEnabled } from '../fixtures/services';
 import DqGauge from '../components/DqGauge';
 import { DataTable, Pill, SectionTitle, SkeletonRows, Sparkline, fmtDate, fmtNum, toneForStatus, type Column } from '../components/ui';
 import type { PipelineRun } from '../fixtures/platform';
@@ -54,6 +55,9 @@ export default function Dashboard({ tenantId, actor }: { tenantId: string; actor
   const totalRows = useMemo(() => tenantDatasets.reduce((sum, d) => sum + d.rows, 0), [tenantDatasets]);
   const goldCount = useMemo(() => tenantDatasets.filter((d) => d.layer === 'gold').length, [tenantDatasets]);
 
+  const states = store.tenantServices[tenantId];
+  const benchOn = !states || isServiceEnabled(states, 'benchmarking');
+  const billOn = !states || isServiceEnabled(states, 'billing');
   const dqScore = dq?.score ?? 0;
   const trendPoints = useMemo(() => {
     if (!dq) return [72, 75, 74, 78, 80, 82];
@@ -259,7 +263,9 @@ export default function Dashboard({ tenantId, actor }: { tenantId: string; actor
 
         <div className="card" data-testid="billing-summary">
           <h3>Usage &amp; billing (teaser)</h3>
-          {report ? (
+          {!billOn ? (
+            <p className="muted">Usage Billing is disabled for this tenant.</p>
+          ) : report ? (
             <>
               <p>
                 Period {report.period_start} → {report.period_end} · {report.record_count} records ·{' '}
@@ -280,6 +286,15 @@ export default function Dashboard({ tenantId, actor }: { tenantId: string; actor
             </>
           ) : (
             <SkeletonRows n={3} />
+          )}
+        </div>
+
+        <div className="card" data-testid="benchmarking-card">
+          <h3>Federated Benchmarking</h3>
+          {benchOn ? (
+            <p>Your DQ {dqScore} vs network median 84.1 · {Math.max(0, store.tenants.filter((t) => t.status === 'active').length - 1)} peer tenants participating · aggregates only, small cells suppressed (k≥25).</p>
+          ) : (
+            <p className="muted">Federated Benchmarking is disabled for this tenant (add-on).</p>
           )}
         </div>
       </div>
