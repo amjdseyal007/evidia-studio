@@ -18,10 +18,10 @@
   "updated_at": "2026-10-09T05:50:33Z"
  },
  {
-  "detail": "Redeploying after global-name collision fix: 'ef-config-dev' is owned by an unrelated account in S3's global namespace. All explicit bucket names now account-suffixed (ef-<purpose>-<env>-<account>) across security/data/apps modules + regression test tests/test_bucket_naming.py. Empty REVIEW_IN_PROGRESS stack (0 resources) deleted first.",
+  "detail": "Redeploying (attempt 4). Fixes applied: (1) S3 account-suffixed bucket names (global collision ef-config-dev); (2) SecurityHub FSBP slug foundations->foundational (verified via describe-standards); (3) CfnHub EnableDefaultStandards=false (explicit subscriptions own standards). Orphaned KMS keys from rollbacks scheduled for deletion (7-day window).",
   "status": "running",
   "step": "ef-security-dev",
-  "updated_at": "2026-10-09T05:59:55Z"
+  "updated_at": "2026-10-09T06:16:47Z"
  },
  {
   "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
