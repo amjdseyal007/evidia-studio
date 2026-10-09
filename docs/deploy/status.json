@@ -18,10 +18,10 @@
   "updated_at": "2026-10-09T05:50:33Z"
  },
  {
-  "detail": "Redeploying (attempt 5). Fixes so far: account-suffixed buckets; FSBP slug foundational; Hub EnableDefaultStandards=false; KMS service grants for cloudtrail/config principals (rollback #4). Rollback orphan keys scheduled for deletion each round (7-day window).",
+  "detail": "Redeploying (attempt 6). Fix stack so far: account-suffixed buckets; FSBP slug foundational; Hub EnableDefaultStandards=false; KMS service grants; AND the CloudTrail bucket-policy prefix cloudtrail//AWSLogs double-slash removed (s3_key_prefix trailing slash \u2014 rollback #4/#5 co-cause). Orphan keys scheduled for deletion each rollback (7-day window).",
   "status": "running",
   "step": "ef-security-dev",
-  "updated_at": "2026-10-09T06:22:03Z"
+  "updated_at": "2026-10-09T06:27:07Z"
  },
  {
   "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
