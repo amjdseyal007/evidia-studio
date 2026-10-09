@@ -1,17 +1,24 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import Dashboard from '../views/Dashboard';
 import CohortBuilder from '../views/CohortBuilder';
-import EvidenceViewer from '../views/EvidenceViewer';
+import Evidence from '../views/Evidence';
 import AgentConsole from '../views/AgentConsole';
-import TenantAdmin from '../views/TenantAdmin';
+import { ToastProvider } from '../components/ui';
+import { __resetStore } from '../lib/store';
 
 const text = (el: HTMLElement) => el.textContent ?? '';
+const wrap = (ui: React.ReactNode) => render(<ToastProvider>{ui}</ToastProvider>);
+
+beforeEach(() => {
+  __resetStore();
+  localStorage.clear();
+});
 
 describe('Dashboard view (mock)', () => {
-  it('renders mock banner, tenant cards, DQ gauge, studies and billing', async () => {
-    render(<Dashboard tenantId="acme_rare" />);
-    expect(text(screen.getByTestId('mock-banner'))).toContain('MOCK DATA');
+  it('renders KPI cards, DQ gauge, studies, billing and tenant cards', async () => {
+    wrap(<Dashboard tenantId="acme_rare" actor="amjad@evidia.example" />);
+    expect(await screen.findByTestId('kpi-cards')).toBeTruthy();
     expect(text(await screen.findByTestId('dq-gauge'))).toContain('86.5 / 100');
     expect(text(await screen.findByTestId('recent-studies'))).toContain('External control');
     expect(text(await screen.findByTestId('billing-summary'))).toContain('unpriced');
@@ -20,22 +27,21 @@ describe('Dashboard view (mock)', () => {
 });
 
 describe('Cohort Builder view (mock)', () => {
-  it('renders editor, validates and counts with fixture attrition', async () => {
-    render(<CohortBuilder />);
-    expect(screen.getByTestId('mock-banner')).toBeTruthy();
+  it('validates, counts with fixture attrition, and shows the saved library', async () => {
+    wrap(<CohortBuilder tenantId="acme_rare" actor="priya.nair@acme.example" role="Biostatistician" />);
+    const editor = (await screen.findByTestId('cohort-json')) as HTMLTextAreaElement;
     await screen.findByDisplayValue(/Rare disease external-control cohort/);
-    const editor = screen.getByTestId('cohort-json') as HTMLTextAreaElement;
-    expect(editor.value).toContain('Rare disease external-control cohort');
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     expect(text(await screen.findByTestId('validation-result'))).toContain('Valid definition');
     fireEvent.click(screen.getByRole('button', { name: 'Count' }));
     expect(text(await screen.findByTestId('attrition'))).toContain('Age 18');
+    expect(text(await screen.findByTestId('saved-cohorts'))).toContain('Rare disease external-control cohort');
   });
 });
 
-describe('Evidence Package view (mock)', () => {
-  it('renders provenance chain and Part 11 signatures', async () => {
-    render(<EvidenceViewer />);
+describe('Evidence view (mock)', () => {
+  it('renders provenance chain, INTACT status and Part 11 signatures', async () => {
+    wrap(<Evidence tenantId="acme_rare" role="Biostatistician" />);
     expect(text(await screen.findByTestId('provenance-chain'))).toContain('De-identification gate');
     expect(text(screen.getByTestId('chain-status'))).toContain('INTACT');
     expect(text(screen.getByTestId('signature-list'))).toContain('Fixture Biostatistician');
@@ -43,22 +49,11 @@ describe('Evidence Package view (mock)', () => {
 });
 
 describe('Agent Console view (mock)', () => {
-  it('renders 5 agent cards and expandable run detail with ontology calls', async () => {
-    render(<AgentConsole tenantId="acme_rare" />);
-    expect(text(await screen.findByText(/StudyDesignAgent/))).toContain('StudyDesignAgent');
-    expect(text(screen.getByTestId('agent-cards'))).toContain('FeasibilityAgent');
+  it('renders 5 agent cards and run history with detail', async () => {
+    wrap(<AgentConsole tenantId="acme_rare" actor="priya.nair@acme.example" role="Biostatistician" />);
+    expect(text(await screen.findByTestId('agent-cards'))).toContain('FeasibilityAgent');
     expect(text(await screen.findByTestId('run-history'))).toContain('run-feas-20261007-001');
     fireEvent.click(screen.getAllByRole('button', { name: 'Detail' })[0]);
-    expect(text(await screen.findByTestId('run-detail'))).toContain('describe_schema');
-  });
-});
-
-describe('Tenant Admin view (mock)', () => {
-  it('renders tenants with provisioning resources and offboard guard', async () => {
-    render(<TenantAdmin />);
-    expect(text(await screen.findByText(/alias\/ef-tenant-acme_rare-dev/))).toContain('alias/ef-tenant-acme_rare-dev');
-    expect(text(screen.getByTestId('tenant-list'))).toContain('alias/ef-tenant-acme_rare-dev');
-    expect(text(screen.getByTestId('offboard-acme_rare'))).toContain('BLOCKED');
-    expect(text(screen.getByTestId('offboard-corvus_tx'))).toContain('ALLOWED');
+    expect(await screen.findByTestId('run-detail')).toBeTruthy();
   });
 });

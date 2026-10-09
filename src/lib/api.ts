@@ -32,7 +32,25 @@ import { atlasExportFixture, cohortCountFixture, sampleCohortDefinition } from '
 import { dqFixtureByTenant, invoiceReportFixture, studyFixtures, usageRecordFixtures } from '../fixtures/dashboard';
 import { evidenceFixture } from '../fixtures/evidence';
 import { tenantFixtures } from '../fixtures/tenants';
+import { classParentSeed, classSynonymSeed, mcpToolSeed, ontologyClassSeed, ontologyExtensionClassSeed, ontologyNamespaceSeed, ontologyPropertySeed, pipelineStages, semanticSearchOntology } from '../fixtures/ontology';
+import type { ChangeProposal, ConceptMapping, OntologyVersion, SemanticHit } from '../fixtures/ontology';
+export type { ChangeProposal, ConceptMapping, OntologyVersion, SemanticHit };
+import type {
+  ActivityItem, ApiKeyRecord, ConnectorRecord, ControlTenant, DatasetRecord,
+  EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
+  ServiceHealth, UserRecord,
+} from '../fixtures/platform';
+import type { ConnectorCapability } from '../fixtures/platform';
+import * as store from './store';
+import type { AuditEntry, SavedCohort } from './store';
+import type { Role } from './permissions';
 import { currentTenant, getToken } from './auth';
+
+export type {
+  ActivityItem, ApiKeyRecord, ConnectorRecord, ControlTenant, DatasetRecord,
+  EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
+  ServiceHealth, UserRecord, AuditEntry, SavedCohort, ConnectorCapability,
+};
 
 // ---------------------------------------------------------------------------
 // Mode configuration (env-based switch)
@@ -433,6 +451,28 @@ export interface TenantAdminEntry {
 // Shared client contract — the exact surface the views consume. Mock and
 // live implementations are interchangeable behind this interface.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Enterprise console extension (control plane, pipeline, connectors,
+// users, products, ontology). Mock implementations delegate to the
+// stateful demo store (src/lib/store.ts); live implementations fail
+// loudly (endpoints not mounted on studio/api yet).
+// ---------------------------------------------------------------------------
+export interface OntologyBundle {
+  classes: typeof ontologyClassSeed;
+  properties: typeof ontologyPropertySeed;
+  namespaces: typeof ontologyNamespaceSeed;
+  pipelineStages: typeof pipelineStages;
+  mcpTools: typeof mcpToolSeed;
+  mappings: ConceptMapping[];
+  versions: OntologyVersion[];
+  proposals: ChangeProposal[];
+  parents: typeof classParentSeed;
+  synonyms: typeof classSynonymSeed;
+}
+export interface ProductEntitlement { product: ProductRecord; entitled: boolean; note: string }
+export interface OffboardCheck { allowed: boolean; blocked_reasons: string[] }
+export interface ConnectorTestResult { ok: boolean; latency_ms: number; message: string }
+
 export interface StudioApi {
   mode: ApiMode;
   listTenants(): Promise<TenantAdminEntry[]>;
@@ -448,6 +488,50 @@ export interface StudioApi {
   getEvidencePackage(studyId: string): Promise<EvidencePackage>;
   listAgents(): Promise<AgentDefinition[]>;
   listAgentRuns(tenantId?: string): Promise<AgentRun[]>;
+
+  // --- enterprise console extension ---
+  listCpTenants(): Promise<ControlTenant[]>;
+  provisionTenant(input: store.ProvisionTenantInput): Promise<ControlTenant>;
+  evaluateOffboard(tenantId: string): Promise<OffboardCheck>;
+  offboardTenant(tenantId: string, actor: string): Promise<OffboardCheck>;
+  getEnvironments(): Promise<EnvironmentRecord[]>;
+  listServices(): Promise<ServiceHealth[]>;
+  listAudit(tenantId?: string): Promise<AuditEntry[]>;
+  listUsers(tenantId?: string): Promise<UserRecord[]>;
+  inviteUser(input: store.InviteUserInput): Promise<UserRecord>;
+  setUserStatus(userId: string, status: UserRecord['status'], actor: string): Promise<void>;
+  setUserRole(userId: string, role: Role, actor: string): Promise<void>;
+  listDatasets(tenantId?: string): Promise<DatasetRecord[]>;
+  addDataset(input: { name: string; tenant_id: string; layer: DatasetRecord['layer']; source: string; actor: string }): Promise<DatasetRecord>;
+  listPipelineRuns(tenantId?: string): Promise<PipelineRun[]>;
+  startPipelineRun(datasetId: string, actor: string): Promise<PipelineRun>;
+  listConnectors(tenantId?: string): Promise<ConnectorRecord[]>;
+  addConnector(input: store.AddConnectorInput): Promise<ConnectorRecord>;
+  testConnector(connectorId: string, actor: string): Promise<ConnectorTestResult>;
+  setConnectorEnabled(connectorId: string, enabled: boolean, actor: string): Promise<void>;
+  deleteConnector(connectorId: string, actor: string): Promise<void>;
+  listProducts(): Promise<ProductRecord[]>;
+  listEntitlements(tenantId: string): Promise<ProductEntitlement[]>;
+  listSavedCohorts(tenantId?: string): Promise<SavedCohort[]>;
+  saveCohort(name: string, definition: CohortDefinition, finalCount: number | null, tenantId: string, author: string): Promise<SavedCohort>;
+  deleteCohort(id: string, actor: string): Promise<void>;
+  startAgentRun(agentName: string, tenantId: string, studyId: string | null, actor: string): Promise<AgentRun>;
+  listEvidencePackages(tenantId: string): Promise<EvidencePackage[]>;
+  listApiKeys(tenantId: string): Promise<ApiKeyRecord[]>;
+  createApiKey(name: string, tenantId: string, actor: string): Promise<{ record: ApiKeyRecord; secret: string }>;
+  revokeApiKey(keyId: string, actor: string): Promise<void>;
+  listNotifications(): Promise<NotificationItem[]>;
+  markNotificationRead(id: string): Promise<void>;
+  markAllNotificationsRead(): Promise<void>;
+  listActivity(tenantId?: string): Promise<ActivityItem[]>;
+  getOntology(): Promise<OntologyBundle>;
+  listConceptMappings(): Promise<ConceptMapping[]>;
+  mapCodes(codesText: string, tenantId: string, actor: string): Promise<store.MapCodesResult>;
+  reviewMapping(id: string, decision: 'approved' | 'rejected', tenantId: string, actor: string): Promise<void>;
+  decideProposal(id: string, decision: 'approved' | 'rejected', tenantId: string, actor: string): Promise<void>;
+  submitProposal(input: { title: string; kind: ChangeProposal['kind']; detail: string }, tenantId: string, actor: string): Promise<ChangeProposal>;
+  semanticSearch(query: string): Promise<SemanticHit[]>;
+  signEvidence(tenantId: string, signerName: string, signerId: string, meaning: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +596,158 @@ export function createMockApi(): StudioApi {
     },
     async listAgentRuns(tenantId?: string): Promise<AgentRun[]> {
       return tick(tenantId ? agentRunFixtures.filter((r) => r.tenant_id === tenantId) : agentRunFixtures);
+    },
+
+    // --- enterprise console extension (demo store backed) ---
+    async listCpTenants() {
+      return tick(store.getState().tenants);
+    },
+    async provisionTenant(input) {
+      return tick(store.provisionTenant(input));
+    },
+    async evaluateOffboard(tenantId) {
+      return tick(store.evaluateOffboard(tenantId));
+    },
+    async offboardTenant(tenantId, actor) {
+      return tick(store.offboardTenant(tenantId, actor));
+    },
+    async getEnvironments() {
+      return tick(store.getState().environments);
+    },
+    async listServices() {
+      return tick(store.getState().services);
+    },
+    async listAudit(tenantId) {
+      const all = store.getState().audit;
+      return tick(tenantId ? all.filter((a) => a.tenant_id === tenantId) : all);
+    },
+    async listUsers(tenantId) {
+      const all = store.getState().users;
+      return tick(tenantId ? all.filter((u) => u.tenant_id === tenantId) : all);
+    },
+    async inviteUser(input) {
+      return tick(store.inviteUser(input));
+    },
+    async setUserStatus(userId, status, actor) {
+      store.setUserStatus(userId, status, actor); return tick(undefined);
+    },
+    async setUserRole(userId, role, actor) {
+      store.setUserRole(userId, role, actor); return tick(undefined);
+    },
+    async listDatasets(tenantId) {
+      const all = store.getState().datasets;
+      return tick(tenantId ? all.filter((d) => d.tenant_id === tenantId) : all);
+    },
+    async addDataset(input) {
+      return tick(store.addDataset(input));
+    },
+    async listPipelineRuns(tenantId) {
+      const all = store.getState().pipelineRuns;
+      return tick(tenantId ? all.filter((r) => r.tenant_id === tenantId) : all);
+    },
+    async startPipelineRun(datasetId, actor) {
+      return tick(store.startPipelineRun(datasetId, actor));
+    },
+    async listConnectors(tenantId) {
+      const all = store.getState().connectors;
+      return tick(tenantId ? all.filter((c) => c.tenant_id === tenantId) : all);
+    },
+    async addConnector(input) {
+      return tick(store.addConnector(input));
+    },
+    async testConnector(connectorId, actor) {
+      return store.testConnector(connectorId, actor);
+    },
+    async setConnectorEnabled(connectorId, enabled, actor) {
+      store.setConnectorEnabled(connectorId, enabled, actor); return tick(undefined);
+    },
+    async deleteConnector(connectorId, actor) {
+      store.deleteConnector(connectorId, actor); return tick(undefined);
+    },
+    async listProducts() {
+      return tick(store.getState().products);
+    },
+    async listEntitlements(tenantId) {
+      const notes: Record<string, string> = {
+        P0: 'Platform subscription — active',
+        P1: tenantId === 'acme_rare' ? '2 studies under contract' : 'Not contracted',
+        P2: 'Cycle 3 window opens Nov 1, 2026',
+        P3: 'Add-on — not enabled',
+      };
+      return tick(store.getState().products.map((p) => ({
+        product: p,
+        entitled: p.product_id === 'P0' || (tenantId === 'acme_rare' && p.product_id === 'P1'),
+        note: notes[p.product_id],
+      })));
+    },
+    async listSavedCohorts(tenantId) {
+      const all = store.getState().savedCohorts;
+      return tick(tenantId ? all.filter((c) => c.tenant_id === tenantId) : all);
+    },
+    async saveCohort(name, definition, finalCount, tenantId, author) {
+      return tick(store.saveCohort(name, definition, finalCount, tenantId, author));
+    },
+    async deleteCohort(id, actor) {
+      store.deleteCohort(id, actor); return tick(undefined);
+    },
+    async startAgentRun(agentName, tenantId, studyId, actor) {
+      return tick(store.startAgentRun(agentName, tenantId, studyId, actor));
+    },
+    async listEvidencePackages(tenantId) {
+      return tick([{ ...store.getState().evidence, tenant_id: tenantId }]);
+    },
+    async listApiKeys(tenantId) {
+      return tick(store.getState().apiKeys.filter((k) => k.tenant_id === tenantId));
+    },
+    async createApiKey(name, tenantId, actor) {
+      return tick(store.createApiKey(name, tenantId, actor));
+    },
+    async revokeApiKey(keyId, actor) {
+      store.revokeApiKey(keyId, actor); return tick(undefined);
+    },
+    async listNotifications() {
+      return tick(store.getState().notifications);
+    },
+    async markNotificationRead(id) {
+      store.markNotificationRead(id); return tick(undefined);
+    },
+    async markAllNotificationsRead() {
+      store.markAllNotificationsRead(); return tick(undefined);
+    },
+    async listActivity(tenantId) {
+      const all = store.getState().activity;
+      return tick(tenantId ? all.filter((a) => a.tenant_id === tenantId) : all);
+    },
+    async getOntology() {
+      const s = store.getState();
+      return tick({
+        classes: [...ontologyClassSeed, ...ontologyExtensionClassSeed], properties: ontologyPropertySeed,
+        namespaces: ontologyNamespaceSeed, pipelineStages, mcpTools: mcpToolSeed,
+        mappings: s.mappings, versions: s.ontologyVersions, proposals: s.proposals,
+        parents: classParentSeed, synonyms: classSynonymSeed,
+      });
+    },
+    async listConceptMappings() {
+      return tick(store.getState().mappings);
+    },
+    async mapCodes(codesText, tenantId, actor) {
+      return tick(store.mapCodes(codesText, tenantId, actor));
+    },
+    async reviewMapping(id, decision, tenantId, actor) {
+      store.reviewMapping(id, decision, tenantId, actor); return tick(undefined);
+    },
+    async decideProposal(id, decision, tenantId, actor) {
+      store.decideProposal(id, decision, tenantId, actor); return tick(undefined);
+    },
+    async submitProposal(input, tenantId, actor) {
+      return tick(store.submitProposal(input, tenantId, actor));
+    },
+    async semanticSearch(query) {
+      return tick(semanticSearchOntology(query, [...ontologyClassSeed, ...ontologyExtensionClassSeed], ontologyPropertySeed, store.getState().mappings));
+    },
+    async signEvidence(tenantId, signerName, signerId, meaning) {
+      store.signEvidence(tenantId, signerName, signerId, meaning);
+      return tick(undefined);
     },
   };
 }
@@ -765,7 +1001,34 @@ export function createLiveApi(config: ApiConfig, deps: LiveApiDeps = {}): Studio
       const payload = await request<unknown>(`/api/ai/runs${qs}`);
       return unwrapList<AgentRun>(payload, ['runs', 'items']);
     },
+
+    // --- enterprise console extension: not mounted on studio/api yet.
+    // These fail loudly (never fixture fallback) until endpoint parity lands.
+    ...enterpriseNotMounted(),
   };
+}
+
+const ENTERPRISE_LIVE_METHODS = [
+  'listCpTenants', 'provisionTenant', 'evaluateOffboard', 'offboardTenant',
+  'getEnvironments', 'listServices', 'listAudit', 'listUsers', 'inviteUser',
+  'setUserStatus', 'setUserRole', 'listDatasets', 'addDataset',
+  'listPipelineRuns', 'startPipelineRun', 'listConnectors', 'addConnector',
+  'testConnector', 'setConnectorEnabled', 'deleteConnector', 'listProducts',
+  'listEntitlements', 'listSavedCohorts', 'saveCohort', 'deleteCohort',
+  'startAgentRun', 'listEvidencePackages', 'listApiKeys', 'createApiKey',
+  'revokeApiKey', 'listNotifications', 'markNotificationRead',
+  'markAllNotificationsRead', 'listActivity', 'getOntology',
+  'listConceptMappings', 'mapCodes', 'reviewMapping', 'decideProposal',
+  'submitProposal', 'semanticSearch', 'signEvidence',
+] as const;
+
+type EnterpriseNotMounted = Pick<StudioApi, (typeof ENTERPRISE_LIVE_METHODS)[number]>;
+
+function enterpriseNotMounted(): EnterpriseNotMounted {
+  const fail = (name: string) => async (): Promise<never> => {
+    throw new ApiError(`Evidia Studio API: ${name} is not exposed by the live API yet (enterprise console endpoint parity pending)`, 501);
+  };
+  return Object.fromEntries(ENTERPRISE_LIVE_METHODS.map((n) => [n, fail(n)])) as unknown as EnterpriseNotMounted;
 }
 
 /** Factory behind the same StudioApi surface the views consume. */
