@@ -24,58 +24,58 @@
   "updated_at": "2026-10-09T07:24:18Z"
  },
  {
-  "detail": "Redeploying. First attempt failed: LF skeleton (settings/tags) deployed ungated but LF APIs require a registered LF-admin deploy principal; LF skeleton now sits behind the same lakeformation_grants_enabled gate as the grants (OFF).",
-  "status": "running",
+  "detail": "BLOCKED (human decision): org SCP p-sdxy6x4w (org o-yu55c2titn) explicitly denies s3:PutBucketObjectLockConfiguration; the audit bucket's Object Lock (GOVERNANCE 365d dev) is deliberate Part 11 evidence design. Options: (A) org admin exempts this account, (B) approve dev-only template relaxation, (C) relocate audit bucket. LF gate fix from attempt 1 already committed.",
+  "status": "blocked",
   "step": "ef-data-dev",
-  "updated_at": "2026-10-09T07:30:10Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Aurora Serverless metadata/ontology registry",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-metadata-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Cognito user pool + tenant groups + JWT authorizer",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-identity-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Fargate skeleton + Batch queues",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-compute-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Not synthesized under current config (connectors registry empty) \u2014 confirm at step",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-connectors-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "API Gateway (HTTP API) + Cognito authorizer",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-api-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Product services (Part 11 store, billing, benchmarking)",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-product-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "Bedrock agents \u2014 model_access_approved=false in config; may block on model entitlement (human console step if so)",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-ai-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
-  "detail": "CloudWatch dashboards/alarms/per-tenant budgets (alerts email unset in config)",
+  "detail": "Waiting on ef-data-dev (human decision: org SCP blocks Object Lock).",
   "status": "pending",
   "step": "ef-observability-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:34:12Z"
  },
  {
   "detail": "API 401/403 without token, Cognito pool, demo KMS alias, Batch queue, CloudTrail logging",
