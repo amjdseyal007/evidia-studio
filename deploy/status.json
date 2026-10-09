@@ -1,0 +1,86 @@
+[
+ {
+  "detail": "CDKToolkit CREATE_COMPLETE in us-east-1 (bootstrap version 32, qualifier hnb659fds). Two `cdk bootstrap` attempts died on ECONNRESET after the change set was created; completed by executing CDK's own pending change set (cdk-bootstrap-change-set-19b9fe20) via the CloudFormation API.",
+  "status": "done",
+  "step": "bootstrap",
+  "updated_at": "2026-10-09T05:10:00Z"
+ },
+ {
+  "detail": "CREATE_COMPLETE. DeployerRoleArn=arn:aws:iam::058264539070:role/ef-deployer-dev (GitHub OIDC, 5 managed policies attached).",
+  "status": "done",
+  "step": "ef-deployer-dev",
+  "updated_at": "2026-10-09T05:22:18Z"
+ },
+ {
+  "detail": "CREATE_COMPLETE after fix (networking.py:109 'workloads to VPC endpoints') + charset regression test (tests/test_sg_description_charset.py, sweeps all dev templates). Empty ROLLBACK_COMPLETE stack deleted under authorization (0 orphaned VPCs verified). Note: describe-stack-resources listed 22 deleted-history records at delete time, all DELETE_COMPLETE; CFN delete completed clean.",
+  "status": "done",
+  "step": "ef-network-dev",
+  "updated_at": "2026-10-09T05:50:33Z"
+ },
+ {
+  "detail": "Security baseline (CloudTrail/Config/GuardDuty/Security Hub/WAF); Macie off per config",
+  "status": "running",
+  "step": "ef-security-dev",
+  "updated_at": "2026-10-09T05:50:33Z"
+ },
+ {
+  "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
+  "status": "pending",
+  "step": "ef-data-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Aurora Serverless metadata/ontology registry",
+  "status": "pending",
+  "step": "ef-metadata-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Cognito user pool + tenant groups + JWT authorizer",
+  "status": "pending",
+  "step": "ef-identity-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Fargate skeleton + Batch queues",
+  "status": "pending",
+  "step": "ef-compute-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Not synthesized under current config (connectors registry empty) \u2014 confirm at step",
+  "status": "pending",
+  "step": "ef-connectors-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "API Gateway (HTTP API) + Cognito authorizer",
+  "status": "pending",
+  "step": "ef-api-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Product services (Part 11 store, billing, benchmarking)",
+  "status": "pending",
+  "step": "ef-product-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "Bedrock agents \u2014 model_access_approved=false in config; may block on model entitlement (human console step if so)",
+  "status": "pending",
+  "step": "ef-ai-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "CloudWatch dashboards/alarms/per-tenant budgets (alerts email unset in config)",
+  "status": "pending",
+  "step": "ef-observability-dev",
+  "updated_at": "2026-10-09T05:13:16Z"
+ },
+ {
+  "detail": "API 401/403 without token, Cognito pool, demo KMS alias, Batch queue, CloudTrail logging",
+  "status": "pending",
+  "step": "smoke-checks",
+  "updated_at": "2026-10-09T05:13:16Z"
+ }
+]

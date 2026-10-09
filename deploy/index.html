@@ -1,0 +1,55 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evidia — live deployment tracker</title>
+<style>body{font-family:Inter,system-ui,sans-serif;background:#f4f6fb;color:#0d1526;margin:0;padding:22px}
+.wrap{max-width:880px;margin:0 auto}h1{font-size:21px;margin:0 0 4px}.sub{color:#5c677d;font-size:13px}
+.bar{display:flex;gap:10px;align-items:center;margin:16px 0;flex-wrap:wrap}
+button{font:inherit;font-size:13.5px;padding:8px 18px;border-radius:8px;border:1px solid #2f5cff;background:#2f5cff;color:#fff;cursor:pointer;font-weight:650}
+button:active{transform:translateY(1px)} .ghost{background:#fff;color:#0d1526;border-color:#dde3ec;font-weight:500}
+.chips span{background:#fff;border:1px solid #dde3ec;border-radius:999px;padding:3px 10px;font-size:12px;margin-right:6px}
+.stage{background:#fff;border:1px solid #dde3ec;border-radius:12px;margin-top:10px;padding:4px 14px}
+summary{display:flex;gap:10px;align-items:center;cursor:pointer;padding:10px 0;list-style:none}summary::-webkit-details-marker{display:none}
+.dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.nm{font-weight:650;font-size:14px}.st{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.05em}
+.body{border-top:1px solid #edf1f7;padding:10px 0 12px 36px;font-size:13px;color:#33415c}
+.spin{display:inline-block;animation:sp 1.2s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+#err{color:#b42318;font-size:13px}</style></head>
+<body><div class="wrap">
+<h1>Evidia Health — live deployment tracker</h1>
+<div class="sub">Account 058264539070 · us-east-1 · env dev · tenant demo (synthetic). Click any stage for detail. Snapshot publishes at every stage change (allow ~1 min after a change, then hit Refresh).</div>
+<div class="bar">
+<button id="refresh">&#8635; Refresh now</button>
+<button class="ghost" id="auto">Auto-refresh: ON (60s)</button>
+<span class="sub" id="when">loading…</span><span id="err"></span>
+</div>
+<div class="chips"><span id="counts">…</span></div>
+<div id="stages"></div>
+</div>
+<script>
+const C={done:'#12805c',running:'#2f5cff',pending:'#98a2b3',failed:'#b42318'};
+const B={done:'#e2f4ec',running:'#e8eeff',pending:'#f2f4f7',failed:'#fdecea'};
+const I={done:'&#10003;',running:'<span class="spin">&#9696;</span>',pending:'&#183;',failed:'&#10005;'};
+let auto=true,timer=null;
+async function load(){
+  const err=document.getElementById('err'); err.textContent='';
+  try{
+    const r=await fetch('status.json?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const steps=await r.json();
+    const el=document.getElementById('stages'); el.innerHTML='';
+    let counts={};
+    steps.forEach(s=>{counts[s.status]=(counts[s.status]||0)+1;
+      const d=document.createElement('details'); d.className='stage';
+      if(s.status==='running'||s.status==='failed') d.open=true;
+      d.innerHTML='<summary><span class="dot" style="background:'+B[s.status]+';color:'+C[s.status]+'">'+I[s.status]+'</span>'+
+      '<span class="nm">'+s.step+'</span><span class="st" style="color:'+C[s.status]+'">'+s.status.toUpperCase()+'</span></summary>'+
+      '<div class="body">'+(s.detail||'')+'<div style="margin-top:6px;color:#7d8590;font-size:11.5px">updated '+(s.updated_at||'')+'</div></div>';
+      el.appendChild(d);});
+    document.getElementById('counts').textContent=Object.entries(counts).map(([k,v])=>v+' '+k).join(' · ');
+    const max=steps.map(s=>s.updated_at||'').sort().pop();
+    document.getElementById('when').textContent='data as of '+(max||'—')+' · shown '+new Date().toLocaleTimeString();
+  }catch(e){ err.textContent='refresh failed ('+e.message+') — try again in a few seconds'; }
+}
+document.getElementById('refresh').onclick=load;
+document.getElementById('auto').onclick=function(){auto=!auto;this.textContent='Auto-refresh: '+(auto?'ON (60s)':'OFF');if(auto){timer=setInterval(load,60000)}else{clearInterval(timer)}};
+timer=setInterval(load,60000); load();
+</script></div></body></html>
