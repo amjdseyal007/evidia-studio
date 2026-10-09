@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { api, type ApiKeyRecord, type ControlTenant } from '../lib/api';
 import { useStore } from '../lib/store';
-import { can, type Role } from '../lib/permissions';
+import { PERMISSIONS, PERMISSION_LABELS, can, type Permission, type Role } from '../lib/permissions';
 import { ConfirmDialog, DataTable, Modal, Pill, SectionTitle, fmtDate, toneForStatus, useToasts, type Column } from '../components/ui';
 
 type Profile = {
@@ -15,6 +15,7 @@ type ApiKeyRow = {
   key_id: string;
   name: string;
   prefix: string;
+  scopes: string[];
   created_at: string;
   last_used: string | null;
   status: 'active' | 'revoked';
@@ -67,6 +68,7 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
 
   const [createOpen, setCreateOpen] = useState(false);
   const [keyName, setKeyName] = useState('');
+  const [keyScopes, setKeyScopes] = useState<Permission[]>([]);
   const [keyNameError, setKeyNameError] = useState('');
   const [creating, setCreating] = useState(false);
   const [secretReveal, setSecretReveal] = useState<{ record: ApiKeyRecord; secret: string } | null>(null);
@@ -96,6 +98,7 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
     key_id: k.key_id,
     name: k.name,
     prefix: k.prefix,
+    scopes: [...(k.scopes ?? [])],
     created_at: k.created_at,
     last_used: k.last_used,
     status: k.status,
@@ -109,9 +112,10 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
     setKeyNameError('');
     setCreating(true);
     try {
-      const result = await api.createApiKey(keyName.trim(), tenantId, actor);
+      const result = await api.createApiKey(keyName.trim(), tenantId, actor, keyScopes);
       setCreateOpen(false);
       setKeyName('');
+      setKeyScopes([]);
       setSecretReveal(result);
       push({ title: 'API key created', body: `Key “${result.record.name}” created for ${tenantId}. Copy the secret now — it is shown once.`, tone: 'ok' });
     } catch {
@@ -157,6 +161,20 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
   const keyColumns: Array<Column<ApiKeyRow>> = [
     { key: 'name', label: 'Name', sortValue: (r) => r.name, render: (r) => r.name },
     { key: 'prefix', label: 'Prefix', render: (r) => <span className="mono">{r.prefix}…</span> },
+    {
+      key: 'scopes',
+      label: 'Scopes',
+      render: (r) =>
+        r.scopes.length === 0 ? (
+          <span className="muted">Unscoped (legacy demo)</span>
+        ) : (
+          <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+            {r.scopes.map((s) => (
+              <Pill key={s} tone="info">{s}</Pill>
+            ))}
+          </span>
+        ),
+    },
     { key: 'created', label: 'Created', sortValue: (r) => r.created_at, render: (r) => fmtDate(r.created_at) },
     { key: 'used', label: 'Last used', sortValue: (r) => r.last_used ?? '', render: (r) => fmtDate(r.last_used) },
     { key: 'status', label: 'Status', sortValue: (r) => r.status, render: (r) => <Pill tone={toneForStatus(r.status)}>{r.status}</Pill> },
@@ -263,7 +281,7 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
           sub="Programmatic access keys for this tenant. Secrets are shown once at creation."
           actions={
             keysAllowed ? (
-              <button type="button" className="btn btn-primary" onClick={() => { setKeyName(''); setKeyNameError(''); setCreateOpen(true); }}>Create API key</button>
+              <button type="button" className="btn btn-primary" onClick={() => { setKeyName(''); setKeyScopes([]); setKeyNameError(''); setCreateOpen(true); }}>Create API key</button>
             ) : null
           }
         />
@@ -271,6 +289,7 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
           <p className="muted">Not permitted — apikeys:manage is required to view or manage API keys. Your role ({role}) cannot manage keys in this demo gate.</p>
         ) : (
           <div data-testid="api-keys">
+            <p className="muted">API keys are service accounts — a key can only call what its scopes allow. Secrets are shown once, at creation.</p>
             <DataTable rows={keyRows} columns={keyColumns} rowKey={(r) => r.key_id} emptyText="No API keys for this tenant yet." />
           </div>
         )}
@@ -327,6 +346,23 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
               <input id="key-name" className="input" value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="e.g. Analyst workstation" />
               {keyNameError ? <span className="field-error">{keyNameError}</span> : null}
               <span className="hint">The full secret is shown once after creation. Store it in your secrets manager.</span>
+            </div>
+            <div className="field">
+              <span className="muted">Scopes</span>
+              <p className="muted" style={{ margin: '4px 0 8px' }}>A key can only call what its scopes allow. Leave all unchecked for an unscoped legacy demo key.</p>
+              <div className="checklist">
+                {PERMISSIONS.map((perm) => (
+                  <label key={perm} className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      data-testid={`key-scope-${perm}`}
+                      checked={keyScopes.includes(perm)}
+                      onChange={(e) => setKeyScopes((prev) => (e.target.checked ? [...prev, perm] : prev.filter((x) => x !== perm)))}
+                    />
+                    <span>{PERMISSION_LABELS[perm]} <span className="mono muted" style={{ fontSize: 11 }}>{perm}</span></span>
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setCreateOpen(false)}>Cancel</button>

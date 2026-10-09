@@ -105,6 +105,7 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
   const agentSvc = store.agentServices[tenantId] ?? {};
   const agentOn = (name: string) => agentSvc[name] !== false;
   const canRun = can(role, 'agents:run');
+  const approvedOntology = store.ontologyVersions.find((v) => v.status === 'approved');
 
   return (
     <section>
@@ -134,6 +135,13 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
                   <Pill key={tool} tone="info">{tool}</Pill>
                 ))}
               </div>
+              <div className="row" style={{ marginTop: 10 }}>
+                <Pill tone="info" testId={`agent-version-${a.name}`}>{`v${a.version}`}</Pill>
+              </div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 6 }} data-testid={`agent-ontology-${a.name}`}>
+                Sees approved ontology only: v{approvedOntology?.version ?? '—'}
+              </p>
+              <p className="muted" style={{ fontSize: 12 }} data-testid={`agent-data-handling-${a.name}`}>{a.data_handling}</p>
               <div style={{ marginTop: 12 }}>
                 {!agentOn(a.name) ? (
                   <Pill tone="neutral" testId={`agent-disabled-${a.name}`}>Disabled for this tenant</Pill>

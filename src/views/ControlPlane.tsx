@@ -4,6 +4,7 @@ import { useStore } from '../lib/store';
 import { can } from '../lib/permissions';
 import type { Role } from '../lib/permissions';
 import { ConfirmDialog, DataTable, Meter, Modal, Pill, SectionTitle, fmtDate, fmtNum, toneForStatus, useToasts, type Column } from '../components/ui';
+import { AUDIT_CATEGORIES, auditEventInfo, downloadAuditCsv } from '../lib/auditTaxonomy';
 import ServiceCatalog from '../components/ServiceCatalog';
 
 type TenantRow = {
@@ -72,6 +73,8 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
   const [provRegion, setProvRegion] = useState<string>('us-east-1');
   const [provErrors, setProvErrors] = useState<{ name?: string; tenant_id?: string }>({});
   const [provSubmitting, setProvSubmitting] = useState(false);
+  const [provPreloadDemo, setProvPreloadDemo] = useState(true);
+  const [auditCategory, setAuditCategory] = useState<string>('All');
 
   const [offboardTenantState, setOffboardTenantState] = useState<ControlTenant | null>(null);
   const [offboardVerdict, setOffboardVerdict] = useState<OffboardCheck | null>(null);
@@ -180,6 +183,7 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
     setProvIsolation('pooled');
     setProvRegion('us-east-1');
     setProvErrors({});
+    setProvPreloadDemo(true);
     setProvisionOpen(true);
   }
 
@@ -211,6 +215,7 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
         isolation: provIsolation,
         region: provRegion,
         actor,
+        preload_demo: provPreloadDemo,
       });
       setProvisionOpen(false);
       setSelectedId(created.tenant_id);
@@ -307,6 +312,11 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
     });
   })();
 
+  const filteredAuditEntries = store.audit.filter(
+    (a) => auditCategory === 'All' || auditEventInfo(a.action).category === auditCategory,
+  );
+  const filteredAudit = filteredAuditEntries.map((a) => ({ ...a }));
+
   return (
     <section>
       <SectionTitle
@@ -331,6 +341,11 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
             <h3>{selected.display_name}</h3>
             <Pill tone={toneForStatus(selected.status)}>{selected.status}</Pill>
           </div>
+          {store.datasets.some((d) => d.tenant_id === selected.tenant_id && d.name.includes('Synthetic rare-disease demo')) ? (
+            <p style={{ marginTop: 6 }}>
+              <Pill tone="info" testId={`tenant-demo-data-${selected.tenant_id}`}>Demo data preloaded (R6)</Pill>
+            </p>
+          ) : null}
           <p className="muted">
             <span className="mono">{selected.tenant_id}</span> · {selected.isolation} · {selected.region} · created {fmtDate(selected.created_at)}
             <br />
@@ -358,15 +373,58 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
       <div className="card" style={{ marginBottom: 14 }}>
         <h3>Audit log</h3>
         <p className="muted">Every simulated action in this console is recorded here (actor, tenant, target, result). Filter via the table search.</p>
+        <div className="row" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+          <button
+            type="button"
+            className={auditCategory === 'All' ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
+            data-testid="cp-audit-cat-All"
+            onClick={() => setAuditCategory('All')}
+          >
+            All
+          </button>
+          {AUDIT_CATEGORIES.map((category) => (
+            <button
+              key={category}
+              type="button"
+              className={auditCategory === category ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
+              data-testid={`cp-audit-cat-${category}`}
+              onClick={() => setAuditCategory(category)}
+            >
+              {category}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn btn-sm"
+            data-testid="cp-audit-export-csv"
+            onClick={() => downloadAuditCsv(filteredAuditEntries)}
+          >
+            Export CSV
+          </button>
+        </div>
         <DataTable
-          rows={store.audit.map((a) => ({ ...a }))}
+          rows={filteredAudit}
           columns={[
             { key: 'at', label: 'Time', sortValue: (r) => r.at, render: (r) => fmtDate(r.at) },
             { key: 'actor', label: 'Actor', sortValue: (r) => r.actor, render: (r) => r.actor },
             { key: 'tenant', label: 'Tenant', sortValue: (r) => r.tenant_id, render: (r) => <span className="mono">{r.tenant_id}</span> },
+            {
+              key: 'event', label: 'Event', sortValue: (r) => auditEventInfo(r.action).event,
+              render: (r) => {
+                const info = auditEventInfo(r.action);
+                return (
+                  <span>
+                    <strong>{info.label}</strong>
+                    <br />
+                    <span className="mono muted">{info.event}</span>
+                  </span>
+                );
+              },
+            },
             { key: 'action', label: 'Action', sortValue: (r) => r.action, render: (r) => <span className="mono">{r.action}</span> },
             { key: 'target', label: 'Target', sortValue: (r) => r.target, render: (r) => <span className="mono">{r.target}</span> },
             { key: 'detail', label: 'Detail', render: (r) => r.detail },
+            { key: 'delta', label: 'Delta', render: (r) => r.delta ?? '—' },
             { key: 'result', label: 'Result', sortValue: (r) => r.result, render: (r) => <Pill tone={r.result === 'success' ? 'ok' : r.result === 'blocked' ? 'err' : 'info'}>{r.result}</Pill> },
           ]}
           rowKey={(r) => r.id}
@@ -557,6 +615,17 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
               <select id="prov-region" className="select" value={provRegion} onChange={(e) => setProvRegion(e.target.value)}>
                 {REGIONS.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
+            </div>
+            <div className="field">
+              <label className="row" style={{ fontWeight: 400, alignItems: 'flex-start' }}>
+                <input
+                  type="checkbox"
+                  data-testid="provision-preload-demo"
+                  checked={provPreloadDemo}
+                  onChange={(e) => setProvPreloadDemo(e.target.checked)}
+                />
+                <span>Preload synthetic demo dataset (recommended) — dashboard, DQ gauge, and a starter cohort are ready on minute one</span>
+              </label>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setProvisionOpen(false)}>Cancel</button>

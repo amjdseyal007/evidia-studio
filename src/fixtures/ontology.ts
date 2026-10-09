@@ -75,7 +75,7 @@ export const ontologyNamespaceSeed: OntologyNamespace[] = [
 
 export const pipelineStages = [
   { stage: 'Scan', detail: 'Catalog + schema discovery across tenant sources; OMOP mapping hints.', status: 'implemented' },
-  { stage: 'Model', detail: 'Seed ontology (15 classes / 20 properties) + tenant extensions in W3C RDF/OWL.', status: 'implemented' },
+  { stage: 'Model', detail: 'Versioned W3C RDF/OWL ontology (v0.1.0 approved legacy; v0.2.0 full expansion in review) + tenant extensions.', status: 'implemented' },
   { stage: 'Serve', detail: 'MCP server on Bedrock AgentCore Runtime; per-agent tool allow-lists; Cognito JWT + Cedar pre-auth.', status: 'implemented' },
 ];
 
@@ -83,9 +83,12 @@ export const mcpToolSeed: Array<{ tool: string; description: string; agents: str
   { tool: 'list_metrics', description: 'List governed metrics available in the tenant namespace.', agents: 'All agents' },
   { tool: 'describe_schema', description: 'Describe ontology classes/properties before querying.', agents: 'All agents' },
   { tool: 'query', description: 'Natural-language → SPARQL query over the tenant graph.', agents: 'Cohort QA, Feasibility' },
-  { tool: 'translate_sparql', description: 'Translate/validate SPARQL against the seed ontology.', agents: 'Study Design, Feasibility' },
+  { tool: 'translate_sparql', description: 'Translate/validate SPARQL against the approved ontology.', agents: 'Study Design, Feasibility' },
   { tool: 'rag_retrieval', description: 'Vector retrieval over protocol + evidence documents.', agents: 'Dossier Drafting, Cohort QA' },
   { tool: 'graph_traversal', description: 'Bounded traversal for evidence provenance paths.', agents: 'Dossier Drafting, Targeting' },
+  { tool: 'resolve_concept', description: 'Resolve a source code to the approved standard concept (exact or no-match, never guessed).', agents: 'Feasibility, Cohort QA' },
+  { tool: 'describe_concept', description: 'Describe one concept: definition, hierarchy, mappings.', agents: 'All agents' },
+  { tool: 'semantic_search', description: 'Relationship-aware search over the ontology graph.', agents: 'All agents' },
 ];
 
 // =====================================================================
@@ -196,12 +199,14 @@ export const mappingCandidateSeed: Record<string, Omit<ConceptMapping, 'id' | 'r
 // ---------------------------------------------------------------------
 export interface OntologyVersion {
   version: string;
-  status: 'draft' | 'in-review' | 'approved' | 'superseded';
+  status: 'draft' | 'in-review' | 'approved' | 'superseded' | 'rejected';
   published_at: string | null;
   author: string;
   notes: string;
   classes: number;
   properties: number;
+  decided_by?: string | null;
+  decided_at?: string | null;
 }
 export interface ChangeProposal {
   id: string;
@@ -216,10 +221,9 @@ export interface ChangeProposal {
 }
 
 export const ontologyVersionSeed: OntologyVersion[] = [
-  { version: '0.3.0-draft', status: 'draft', published_at: null, author: 'priya.nair@acme.example', notes: 'Adds estimand layer (ICH E9(R1)) + eligibility criteria classes for cohort semantics.', classes: 17, properties: 20 },
-  { version: '0.2.1', status: 'in-review', published_at: null, author: 'tom.alvarez@acme.example', notes: 'Renal measurement pack: eGFR/creatinine LOINC mappings, CKD staging concepts. Awaiting biostatistician sign-off.', classes: 15, properties: 20 },
-  { version: '0.2.0', status: 'approved', published_at: '2026-10-01T09:00:00Z', author: 'amjad@evidia.example', notes: 'Current approved ontology. Agents see ONLY this version (approved-ontology switch).', classes: 15, properties: 20 },
-  { version: '0.1.0', status: 'superseded', published_at: '2026-09-12T09:00:00Z', author: 'amjad@evidia.example', notes: 'Seed ontology from ontology/evidia-seed.ttl (15 classes / 20 properties).', classes: 15, properties: 20 },
+  { version: '0.3.0-draft', status: 'draft', published_at: null, author: 'priya.nair@acme.example', notes: 'Next draft: care-site network + payer/claims concepts on top of the 0.2.0 expansion. Not agent-visible.', classes: 44, properties: 71 },
+  { version: '0.2.0', status: 'in-review', published_at: null, author: 'priya.nair@acme.example', notes: 'Full ontology expansion: OMOP clinical domains + evidence/estimand + regulatory + commercial classes, SNOMED/RxNorm/LOINC/ICD mappings. Awaiting Biostatistician/Admin sign-off — agents cannot see it yet.', classes: 40, properties: 64, decided_by: null, decided_at: null },
+  { version: '0.1.0', status: 'approved', published_at: '2026-09-12T09:00:00Z', author: 'amjad@evidia.example', notes: 'Approved legacy seed ontology (ontology/evidia-seed.ttl). This is the ONLY version agents see today (approved-ontology switch).', classes: 15, properties: 20 },
 ];
 
 export const changeProposalSeed: ChangeProposal[] = [

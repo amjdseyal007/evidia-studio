@@ -84,6 +84,15 @@ export function can(role: Role | null | undefined, permission: Permission): bool
   return MATRIX[permission].includes(role);
 }
 
+/** Full permission set a preset role holds (clone source for custom roles). */
+export function permissionsForRole(role: Role): Permission[] {
+  return PERMISSIONS.filter((p) => MATRIX[p].includes(role));
+}
+
+export function isPresetRole(name: string): name is Role {
+  return (ROLES as readonly string[]).includes(name);
+}
+
 /** Cognito group names each role maps to (mirrors infra identity module). */
 export function cognitoGroupsFor(role: Role, tenantId: string): string[] {
   return [`tenant-${tenantId}`, `role-${role.toLowerCase().replace(/\s+/g, '-')}`];

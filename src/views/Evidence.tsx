@@ -3,6 +3,7 @@ import { api, type EvidencePackage, type SignatureRecord } from '../lib/api';
 import { recordAudit, useStore } from '../lib/store';
 import { can, type Role } from '../lib/permissions';
 import { isServiceEnabled } from '../fixtures/services';
+import { AUDIT_CATEGORIES, auditEventInfo, downloadAuditCsv } from '../lib/auditTaxonomy';
 import { ConfirmDialog, DataTable, Pill, SectionTitle, SkeletonRows, fmtDate, toneForStatus, useToasts, type Column } from '../components/ui';
 
 type TabKey = 'packages' | 'audit' | 'compliance';
@@ -13,8 +14,11 @@ type AuditRow = {
   at: string;
   actor: string;
   action: string;
+  event: string;
+  category: string;
   target: string;
   detail: string;
+  delta: string | null;
   result: 'success' | 'blocked' | 'info';
 };
 
@@ -39,7 +43,7 @@ function resultTone(result: string): 'ok' | 'err' | 'info' | 'neutral' {
   return 'neutral';
 }
 
-export default function Evidence({ tenantId, role }: { tenantId: string; role: Role }) {
+export default function Evidence({ tenantId, role, actor = 'unknown@example.com' }: { tenantId: string; role: Role; actor?: string }) {
   const store = useStore();
   const { push } = useToasts();
   const [tab, setTab] = useState<TabKey>('packages');
@@ -51,6 +55,9 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
   const [verifiedMsg, setVerifiedMsg] = useState<string | null>(null);
   const [signOpen, setSignOpen] = useState(false);
   const [meaning, setMeaning] = useState('Author attestation');
+  const [exportVerified, setExportVerified] = useState<boolean | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [auditCategory, setAuditCategory] = useState('All');
 
   useEffect(() => {
     let live = true;
@@ -83,28 +90,99 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
 
   const chainHead = allSignatures.length > 0 ? allSignatures[allSignatures.length - 1].record_hash : selectedPkg?.chain_head_hash ?? '';
 
+  const selectedStudy = useMemo(
+    () => (selectedPkg ? store.studies.find((s) => s.study_id === selectedPkg.study_id) : undefined),
+    [store.studies, selectedPkg],
+  );
+  const selectedIsRegulatory = (selectedStudy?.classification ?? 'standard') === 'regulatory';
+  const latestExport = useMemo(
+    () => (selectedPkg ? store.evidenceExports.filter((e) => e.study_id === selectedPkg.study_id)[0] ?? null : null),
+    [store.evidenceExports, selectedPkg],
+  );
+  const tenantExports = useMemo(
+    () => store.evidenceExports.filter((e) => e.tenant_id === tenantId),
+    [store.evidenceExports, tenantId],
+  );
+
+  async function handleGenerateExport() {
+    if (!selectedPkg) return;
+    setExportBusy(true);
+    try {
+      const rec = await api.exportEvidencePackage(selectedPkg.study_id, actor);
+      setExportVerified(null);
+      push({ title: 'Evidence export generated', body: `Fingerprint ${rec.fingerprint}`, tone: 'ok' });
+    } catch (err) {
+      push({ title: 'Export failed', body: err instanceof Error ? err.message : 'Failed to generate export.', tone: 'err' });
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function handleVerifyExport() {
+    if (!latestExport) return;
+    const ok = await api.verifyEvidenceExport(latestExport.export_id);
+    setExportVerified(ok);
+    push({
+      title: ok ? 'Export verified' : 'Verification failed',
+      body: ok ? 'Fingerprint matches package contents.' : 'Fingerprint does not match package contents.',
+      tone: ok ? 'ok' : 'err',
+    });
+  }
+
+  const auditEntries = useMemo(() => store.audit.filter((a) => a.tenant_id === tenantId), [store.audit, tenantId]);
+
   const auditRows: AuditRow[] = useMemo(
     () =>
-      store.audit
-        .filter((a) => a.tenant_id === tenantId)
-        .map((a) => ({
+      auditEntries.map((a) => {
+        const info = auditEventInfo(a.action);
+        return {
           id: a.id,
           at: a.at,
           actor: a.actor,
           action: a.action,
+          event: info.event,
+          category: info.category,
           target: a.target,
           detail: a.detail,
+          delta: a.delta ?? null,
           result: a.result,
-        })),
-    [store.audit, tenantId],
+        };
+      }),
+    [auditEntries],
+  );
+
+  const filteredAuditRows: AuditRow[] = useMemo(
+    () => (auditCategory === 'All' ? auditRows : auditRows.filter((r) => r.category === auditCategory)),
+    [auditRows, auditCategory],
+  );
+
+  const filteredAuditEntries = useMemo(
+    () => (auditCategory === 'All' ? auditEntries : auditEntries.filter((a) => auditEventInfo(a.action).category === auditCategory)),
+    [auditEntries, auditCategory],
   );
 
   const auditColumns: Array<Column<AuditRow>> = [
     { key: 'at', label: 'Time', render: (r) => fmtDate(r.at), sortValue: (r) => r.at },
     { key: 'actor', label: 'Actor', render: (r) => <span className="mono">{r.actor}</span>, sortValue: (r) => r.actor },
     { key: 'action', label: 'Action', render: (r) => <span className="mono">{r.action}</span>, sortValue: (r) => r.action },
+    {
+      key: 'event',
+      label: 'Event',
+      render: (r) => {
+        const info = auditEventInfo(r.action);
+        return (
+          <span>
+            {info.label}
+            <br />
+            <span className="mono muted">{info.event}</span>
+          </span>
+        );
+      },
+      sortValue: (r) => r.event,
+    },
     { key: 'target', label: 'Target', render: (r) => <span className="mono">{r.target}</span>, sortValue: (r) => r.target },
     { key: 'detail', label: 'Detail', render: (r) => r.detail || '—', sortValue: (r) => r.detail },
+    { key: 'delta', label: 'Delta', render: (r) => r.delta ?? '—', sortValue: (r) => r.delta ?? '' },
     { key: 'result', label: 'Result', render: (r) => <Pill tone={resultTone(r.result)}>{r.result}</Pill>, sortValue: (r) => r.result },
   ];
 
@@ -190,7 +268,7 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
                             <strong>{pkg.title}</strong><br />
                             <span className="mono muted">{pkg.study_id}</span>
                           </span>
-                          <button type="button" className="btn btn-sm" onClick={() => { setSelectedStudyId(pkg.study_id); setVerifiedMsg(null); }}>View</button>
+                          <button type="button" className="btn btn-sm" onClick={() => { setSelectedStudyId(pkg.study_id); setVerifiedMsg(null); setExportVerified(null); }}>View</button>
                         </div>
                         <div className="row" style={{ marginTop: 6 }}>
                           <Pill tone={toneForStatus('intact')}>INTACT</Pill>
@@ -255,6 +333,74 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
                   {verifying && <p className="muted">Recomputing hash chain (demo)…</p>}
                   {verifiedMsg && <p><Pill tone="ok">{verifiedMsg}</Pill></p>}
                   <p className="muted">Local demo signature — real Part 11 signing happens in the DynamoDB hash-chain store at deploy. This demo signature never leaves the browser and is not a Part 11 signature.</p>
+
+                  <div data-testid="evidence-export-panel" style={{ marginTop: 16, borderTop: '1px solid var(--line-soft)', paddingTop: 14 }}>
+                    <h3>Verifiable evidence export</h3>
+                    <div className="row" style={{ marginTop: 8 }}>
+                      <Pill tone={selectedIsRegulatory ? 'warn' : 'neutral'} testId="export-classification">{selectedIsRegulatory ? 'Regulatory' : 'Standard'}</Pill>
+                      <span className="muted">{selectedStudy?.ontology_version ? `Pinned ontology: v${selectedStudy.ontology_version} (approved)` : 'Not pinned'}</span>
+                    </div>
+                    <p className="muted" style={{ marginTop: 8 }}>Generate a read-only, fingerprint-verifiable package bundling study metadata, methods, the pinned ontology version, audit trail, Part 11 chain, and QMS summary.</p>
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button type="button" className="btn btn-primary btn-sm" data-testid="export-evidence-btn" disabled={exportBusy} onClick={() => void handleGenerateExport()}>
+                        {exportBusy ? 'Generating…' : 'Generate export'}
+                      </button>
+                      {latestExport ? (
+                        <button type="button" className="btn btn-sm" data-testid="verify-export-btn" onClick={() => void handleVerifyExport()}>
+                          Verify export
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {latestExport ? (
+                      <div style={{ marginTop: 12 }}>
+                        <div>
+                          <span className="muted">Fingerprint </span>
+                          <span className="mono" data-testid="export-fingerprint">{latestExport.fingerprint}</span>
+                        </div>
+                        <p className="muted" style={{ marginTop: 6 }}>
+                          Generated {fmtDate(latestExport.generated_at)} by {latestExport.generated_by} · {latestExport.signature_count} signatures · chain head <span className="mono">{latestExport.chain_head_hash.slice(0, 16)}…</span>
+                        </p>
+                        <div className="row" style={{ marginTop: 6 }}>
+                          <span>{latestExport.items.filter((i) => i.status === 'included').length} of {latestExport.items.length} items ready</span>
+                          {selectedIsRegulatory && latestExport.items.some((i) => i.status === 'pending') ? <Pill tone="warn">Regulatory export incomplete</Pill> : null}
+                        </div>
+                        <ul className="checklist" data-testid="export-checklist" style={{ marginTop: 10 }}>
+                          {latestExport.items.map((item) => (
+                            <li key={item.item}>
+                              <span className={item.status === 'included' ? 'check' : ''}>{item.status === 'included' ? '✓' : '○'}</span>
+                              <span style={{ flex: 1 }}>
+                                <strong>{item.item}</strong>
+                                <br />
+                                <span className="muted">{item.detail}</span>
+                              </span>
+                              <Pill tone={item.status === 'included' ? 'ok' : 'neutral'}>{item.status}</Pill>
+                            </li>
+                          ))}
+                        </ul>
+                        {exportVerified !== null ? (
+                          <p style={{ marginTop: 10 }}>
+                            <Pill tone={exportVerified ? 'ok' : 'err'} testId="export-verified">{exportVerified ? 'Verified — fingerprint matches package contents' : 'Verification failed'}</Pill>
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="muted" style={{ marginTop: 10 }}>No export generated yet for this study. Generate one to produce a verifiable fingerprint.</p>
+                    )}
+
+                    {tenantExports.length > 0 ? (
+                      <div style={{ marginTop: 14 }}>
+                        <h3 style={{ fontSize: 13 }}>Exports for this tenant</h3>
+                        <ul className="list">
+                          {tenantExports.map((exp) => (
+                            <li key={exp.export_id}>
+                              <span className="mono">{exp.fingerprint.slice(0, 24)}…</span> · <span className="mono">{exp.study_id}</span> · {fmtDate(exp.generated_at)} · {exp.generated_by}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : (
                 <div className="card"><div className="empty-state">Select a package to view its provenance and signatures.</div></div>
@@ -268,8 +414,33 @@ export default function Evidence({ tenantId, role }: { tenantId: string; role: R
         <div className="card">
           <h3>Audit log</h3>
           <p className="muted">Tenant {tenantId} · updates live as other views mutate the demo store. Use the table filter to search actor, action, target, or detail.</p>
+          <div className="row" style={{ marginBottom: 10 }}>
+            <button
+              type="button"
+              data-testid="audit-cat-All"
+              className={auditCategory === 'All' ? 'btn btn-primary btn-sm' : 'btn btn-sm'}
+              onClick={() => setAuditCategory('All')}
+            >
+              All
+            </button>
+            {AUDIT_CATEGORIES.map((category) => (
+              <button
+                key={category}
+                type="button"
+                data-testid={`audit-cat-${category}`}
+                className={auditCategory === category ? 'btn btn-primary btn-sm' : 'btn btn-sm'}
+                onClick={() => setAuditCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
+            <span style={{ flex: 1 }} />
+            <button type="button" className="btn btn-sm" data-testid="audit-export-csv" onClick={() => downloadAuditCsv(filteredAuditEntries)}>
+              Export CSV
+            </button>
+          </div>
           <DataTable<AuditRow>
-            rows={auditRows}
+            rows={filteredAuditRows}
             columns={auditColumns}
             rowKey={(r) => r.id}
             testId="audit-log"

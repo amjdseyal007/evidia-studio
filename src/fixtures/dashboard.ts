@@ -54,9 +54,9 @@ export const dqFixtureByTenant: Record<string, QualityResult> = {
 };
 
 export const studyFixtures: StudySummary[] = [
-  { study_id: 'study-acme-001', tenant_id: 'acme_rare', name: 'External control — rare disease cohort A (fixture)', status: 'dossier_draft', updated_at: '2026-10-07T15:04:00Z', cohort_final_count: 187 },
-  { study_id: 'study-acme-002', tenant_id: 'acme_rare', name: 'Feasibility scan — OMOP extract v2 (fixture)', status: 'feasibility', updated_at: '2026-10-06T11:30:00Z', cohort_final_count: null },
-  { study_id: 'study-beacon-001', tenant_id: 'beacon_bio', name: 'Benchmarking cohort (fixture)', status: 'qa_review', updated_at: '2026-10-05T08:45:00Z', cohort_final_count: 342 },
+  { study_id: 'study-acme-001', tenant_id: 'acme_rare', name: 'External control — rare disease cohort A (fixture)', status: 'dossier_draft', updated_at: '2026-10-07T15:04:00Z', cohort_final_count: 187, classification: 'regulatory', ontology_version: '0.1.0', retention_locked: true },
+  { study_id: 'study-acme-002', tenant_id: 'acme_rare', name: 'Feasibility scan — OMOP extract v2 (fixture)', status: 'feasibility', updated_at: '2026-10-06T11:30:00Z', cohort_final_count: null, classification: 'standard', ontology_version: null, retention_locked: false },
+  { study_id: 'study-beacon-001', tenant_id: 'beacon_bio', name: 'Benchmarking cohort (fixture)', status: 'qa_review', updated_at: '2026-10-05T08:45:00Z', cohort_final_count: 342, classification: 'standard', ontology_version: null, retention_locked: false },
 ];
 
 /** ai/billing.py::UsageRecord.to_dict() dicts. */

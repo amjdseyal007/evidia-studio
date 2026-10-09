@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react';
 import { api, type ConnectorRecord } from '../lib/api';
 import { useStore } from '../lib/store';
+import { isServiceEnabled } from '../fixtures/services';
 import { can, type Role } from '../lib/permissions';
 import {
   ConfirmDialog, DataTable, EmptyState, Modal, Pill, SectionTitle,
@@ -211,13 +212,31 @@ export default function Connectors({
   const columns: Array<Column<ConnectorRow>> = [
     {
       key: 'name', label: 'Connector',
-      render: (r) => (<><strong>{r.name}</strong><br /><span className="muted mono">{r.connector_id}</span></>),
+      render: (r) => (
+        <>
+          <strong className={r.enabled ? undefined : 'muted'}>{r.name}</strong>
+          {!r.enabled ? <> <Pill tone="neutral">Disabled</Pill></> : null}
+          <br /><span className="muted mono">{r.connector_id}</span>
+          <br />
+          <span className="muted" style={{ fontSize: 12 }} data-testid={`connector-data-handling-${r.connector_id}`}>{r.data_handling}</span>
+        </>
+      ),
       sortValue: (r) => r.name,
     },
     {
       key: 'type', label: 'Type',
       render: (r) => TYPE_LABELS[r.type],
       sortValue: (r) => TYPE_LABELS[r.type],
+    },
+    {
+      key: 'catalog', label: 'Catalog',
+      render: (r) => (
+        <span className="row">
+          <Pill tone="info" testId={`connector-version-${r.connector_id}`}>{`v${r.version}`}</Pill>
+          <Pill tone={MODE_TONES[r.mode]}>{r.mode.toUpperCase()}</Pill>
+          {r.capabilities.map((cap) => <Pill key={cap} tone="neutral">{cap}</Pill>)}
+        </span>
+      ),
     },
     {
       key: 'mode', label: 'Mode',
@@ -286,6 +305,9 @@ export default function Connectors({
     },
   ];
 
+  const tenantServiceStates = store.tenantServices[tenantId];
+  const connectorsServiceOff = !!tenantServiceStates && !isServiceEnabled(tenantServiceStates, 'connectors');
+
   return (
     <section>
       <SectionTitle
@@ -312,6 +334,12 @@ export default function Connectors({
           not real network calls.
         </span>
       </div>
+
+      {connectorsServiceOff ? (
+        <div style={{ marginBottom: 14 }}>
+          <Pill tone="warn" testId="connectors-service-note">Connectors service is disabled for this tenant (Control Plane → Services)</Pill>
+        </div>
+      ) : null}
 
       {connectors.length === 0 ? (
         <div className="card">

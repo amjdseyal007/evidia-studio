@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, type InvoiceReport, type QualityResult } from '../lib/api';
 import { useStore } from '../lib/store';
 import { isServiceEnabled } from '../fixtures/services';
@@ -146,6 +147,19 @@ export default function Dashboard({ tenantId, actor }: { tenantId: string; actor
           <div className="kpi-delta muted">{failedRuns === 0 ? 'No failed runs for this tenant' : 'Failed runs need triage'}</div>
         </div>
       </div>
+
+      {tenantDatasets.some((d) => d.name.includes('Synthetic rare-disease demo')) ? (
+        <div className="card" style={{ marginBottom: 14 }} data-testid="dashboard-demo-chip">
+          <h3>New here? Demo data is preloaded</h3>
+          <p className="muted">
+            Demo data is preloaded — dashboard, DQ, and a starter cohort are live. Next: open the cohort builder or create your first study.
+          </p>
+          <div className="row">
+            <Link className="btn btn-sm" to="/cohorts">Open cohort builder</Link>
+            <Link className="btn btn-sm btn-primary" to="/studies">Create your first study</Link>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid-2">
         <div className="card">

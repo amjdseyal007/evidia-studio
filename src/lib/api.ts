@@ -46,8 +46,9 @@ import type {
 } from '../fixtures/platform';
 import type { ConnectorCapability } from '../fixtures/platform';
 import * as store from './store';
-import type { AuditEntry, SavedCohort } from './store';
-import type { Role } from './permissions';
+import type { AuditEntry, EvidenceExportRecord, SavedCohort, StudyClassification } from './store';
+import type { CustomRoleDef, AccessRequest } from '../fixtures/access';
+import type { Permission, Role } from './permissions';
 import { currentTenant, getToken } from './auth';
 
 export type {
@@ -55,7 +56,8 @@ export type {
   EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
   ServiceHealth, UserRecord, AuditEntry, SavedCohort, ConnectorCapability,
   ServiceKey, TenantServiceStates, TeamRecord, EngagementRecord,
-  EngagementPhase, EngagementHealth,
+  EngagementPhase, EngagementHealth, EvidenceExportRecord, StudyClassification,
+  CustomRoleDef, AccessRequest, Permission,
 };
 
 // ---------------------------------------------------------------------------
@@ -299,6 +301,12 @@ export interface StudySummary {
   status: string;
   updated_at: string;
   cohort_final_count: number | null;
+  /** R3 classification. Undefined = Standard (pre-classification studies). */
+  classification?: 'standard' | 'regulatory';
+  /** Ontology version pinned at classification (Regulatory only). */
+  ontology_version?: string | null;
+  /** Retention lock applied by Regulatory classification. */
+  retention_locked?: boolean;
 }
 export interface UsageRecord {
   tenant_id: string;
@@ -350,7 +358,7 @@ export interface InvoiceReport {
 // ---------------------------------------------------------------------------
 // Agents (ai/agents/product_agents.py + ai/ontology_mcp.py)
 // ---------------------------------------------------------------------------
-export type OntologyToolName = 'list_metrics' | 'describe_schema' | 'query' | 'translate_sparql' | 'rag_retrieval' | 'graph_traversal';
+export type OntologyToolName = 'list_metrics' | 'describe_schema' | 'query' | 'translate_sparql' | 'rag_retrieval' | 'graph_traversal' | 'resolve_concept' | 'describe_concept' | 'semantic_search';
 export interface AgentDefinition {
   name: string;
   display_name: string;
@@ -358,6 +366,10 @@ export interface AgentDefinition {
   prompt_name: string;
   ontology_agent_key: string;
   allowed_ontology_tools: OntologyToolName[];
+  /** Catalog metadata (agent catalog): packaged version. */
+  version: string;
+  /** Data-handling disclosure: what the agent can read / what crosses the tenant boundary. */
+  data_handling: string;
 }
 export interface OntologyToolCall { tool: OntologyToolName; args_summary: string; latency_ms: number; status: string }
 export interface AgentRun {
@@ -525,7 +537,7 @@ export interface StudioApi {
   startAgentRun(agentName: string, tenantId: string, studyId: string | null, actor: string): Promise<AgentRun>;
   listEvidencePackages(tenantId: string): Promise<EvidencePackage[]>;
   listApiKeys(tenantId: string): Promise<ApiKeyRecord[]>;
-  createApiKey(name: string, tenantId: string, actor: string): Promise<{ record: ApiKeyRecord; secret: string }>;
+  createApiKey(name: string, tenantId: string, actor: string, scopes?: string[]): Promise<{ record: ApiKeyRecord; secret: string }>;
   revokeApiKey(keyId: string, actor: string): Promise<void>;
   listNotifications(): Promise<NotificationItem[]>;
   markNotificationRead(id: string): Promise<void>;
@@ -558,6 +570,23 @@ export interface StudioApi {
   startSupportSession(tenantId: string, actor: string): Promise<void>;
   endSupportSession(tenantId: string, actor: string): Promise<void>;
   activateBreakGlass(tenantId: string, actor: string, reason: string): Promise<void>;
+
+  // --- maturation backlog: R3 classification/exports, R5 roles,
+  //     R7 scoped keys (in createApiKey above), R8 governance decisions ---
+  classifyStudy(studyId: string, level: StudyClassification, actor: string): Promise<StudySummary>;
+  createStudy(input: { name: string; tenant_id: string; classification: StudyClassification }, actor: string): Promise<StudySummary>;
+  exportEvidencePackage(studyId: string, actor: string): Promise<EvidenceExportRecord>;
+  listEvidenceExports(tenantId: string): Promise<EvidenceExportRecord[]>;
+  verifyEvidenceExport(exportId: string): Promise<boolean>;
+  decideOntologyVersion(version: string, decision: 'approved' | 'rejected', tenantId: string, actor: string): Promise<OntologyVersion>;
+  listCustomRoles(tenantId?: string): Promise<CustomRoleDef[]>;
+  createCustomRole(input: { name: string; description?: string; tenant_id: string; cloned_from: Role; permissions: Permission[] }, actor: string): Promise<CustomRoleDef>;
+  updateCustomRole(id: string, patch: { name?: string; description?: string; permissions?: Permission[] }, actor: string): Promise<void>;
+  deleteCustomRole(id: string, actor: string): Promise<void>;
+  assignCustomRole(userId: string, customRoleId: string | null, actor: string): Promise<void>;
+  listAccessRequests(tenantId?: string): Promise<AccessRequest[]>;
+  requestAccess(input: { tenant_id: string; user_id: string | null; requester_name: string; requester_email: string; requested_role: string; is_custom: boolean; reason: string }, actor: string): Promise<AccessRequest>;
+  decideAccessRequest(id: string, decision: 'approved' | 'rejected', actor: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +610,7 @@ export function createMockApi(): StudioApi {
       return tick(dqFixtureByTenant[tenantId] ?? dqFixtureByTenant.acme_rare);
     },
     async listStudies(tenantId: string): Promise<StudySummary[]> {
-      return tick(studyFixtures.filter((s) => s.tenant_id === tenantId));
+      return tick(store.getState().studies.filter((s) => s.tenant_id === tenantId));
     },
     async getInvoiceReport(tenantId: string): Promise<InvoiceReport> {
       // Fixture report is authored for acme_rare; re-stamp the tenant id so
@@ -725,8 +754,8 @@ export function createMockApi(): StudioApi {
     async listApiKeys(tenantId) {
       return tick(store.getState().apiKeys.filter((k) => k.tenant_id === tenantId));
     },
-    async createApiKey(name, tenantId, actor) {
-      return tick(store.createApiKey(name, tenantId, actor));
+    async createApiKey(name, tenantId, actor, scopes = []) {
+      return tick(store.createApiKey(name, tenantId, actor, scopes));
     },
     async revokeApiKey(keyId, actor) {
       store.revokeApiKey(keyId, actor); return tick(undefined);
@@ -829,6 +858,52 @@ export function createMockApi(): StudioApi {
     async activateBreakGlass(tenantId, actor, reason) {
       store.activateBreakGlass(tenantId, actor, reason); return tick(undefined);
     },
+
+    // --- maturation backlog (demo store backed) ---
+    async classifyStudy(studyId, level, actor) {
+      return tick(store.classifyStudy(studyId, level, actor));
+    },
+    async createStudy(input, actor) {
+      return tick(store.createStudy(input, actor));
+    },
+    async exportEvidencePackage(studyId, actor) {
+      return tick(store.exportEvidencePackage(studyId, actor));
+    },
+    async listEvidenceExports(tenantId) {
+      return tick(store.getState().evidenceExports.filter((e) => e.tenant_id === tenantId));
+    },
+    async verifyEvidenceExport(exportId) {
+      return tick(store.verifyEvidenceExport(exportId));
+    },
+    async decideOntologyVersion(version, decision, tenantId, actor) {
+      return tick(store.decideOntologyVersion(version, decision, tenantId, actor));
+    },
+    async listCustomRoles(tenantId) {
+      const all = store.getState().customRoles;
+      return tick(tenantId ? all.filter((r) => r.tenant_id === tenantId) : all);
+    },
+    async createCustomRole(input, actor) {
+      return tick(store.createCustomRole(input, actor));
+    },
+    async updateCustomRole(id, patch, actor) {
+      store.updateCustomRole(id, patch, actor); return tick(undefined);
+    },
+    async deleteCustomRole(id, actor) {
+      store.deleteCustomRole(id, actor); return tick(undefined);
+    },
+    async assignCustomRole(userId, customRoleId, actor) {
+      store.assignCustomRole(userId, customRoleId, actor); return tick(undefined);
+    },
+    async listAccessRequests(tenantId) {
+      const all = store.getState().accessRequests;
+      return tick(tenantId ? all.filter((r) => r.tenant_id === tenantId) : all);
+    },
+    async requestAccess(input, actor) {
+      return tick(store.requestAccess(input, actor));
+    },
+    async decideAccessRequest(id, decision, actor) {
+      store.decideAccessRequest(id, decision, actor); return tick(undefined);
+    },
   };
 }
 
@@ -912,6 +987,9 @@ function normalizeStudy(raw: Record<string, unknown>): StudySummary {
     updated_at: String(raw.updated_at ?? raw.created_utc ?? ''),
     cohort_final_count:
       typeof raw.cohort_final_count === 'number' ? raw.cohort_final_count : null,
+    classification: raw.classification === 'regulatory' ? 'regulatory' : 'standard',
+    ontology_version: typeof raw.ontology_version === 'string' ? raw.ontology_version : null,
+    retention_locked: raw.retention_locked === true,
   };
 }
 
@@ -1105,6 +1183,11 @@ const ENTERPRISE_LIVE_METHODS = [
   'addTeamMember', 'removeTeamMember', 'setTeamRole', 'listEngagements',
   'setEngagementPhase', 'setEngagementHealth', 'toggleEngagementMilestone',
   'startSupportSession', 'endSupportSession', 'activateBreakGlass',
+  'classifyStudy', 'createStudy', 'exportEvidencePackage',
+  'listEvidenceExports', 'verifyEvidenceExport', 'decideOntologyVersion',
+  'listCustomRoles', 'createCustomRole', 'updateCustomRole',
+  'deleteCustomRole', 'assignCustomRole', 'listAccessRequests',
+  'requestAccess', 'decideAccessRequest',
 ] as const;
 
 type EnterpriseNotMounted = Pick<StudioApi, (typeof ENTERPRISE_LIVE_METHODS)[number]>;

@@ -76,15 +76,3 @@ npm run dev    # Vite dev server
 npm run build  # tsc --noEmit && vite build
 npm test       # vitest run (view smoke tests + auth + API mode resolution)
 ```
-
-## Live demo
-
-**https://amjdseyal007.github.io/evidia-studio/** (mock data — no backend, no live accounts)
-
-Served from `docs/` via GitHub Pages. The console runs entirely on
-fixtures with a mock auth seam; the live API switch is one seam in
-`src/lib/api.ts`.
-
-Part of Evidia Health — a BYOD evidence platform for life sciences
-(OMOP harmonization, ontology-governed AI agents, regulator-grade
-evidence packages). The platform backend is under active development.

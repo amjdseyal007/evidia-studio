@@ -10,6 +10,7 @@ import { useStore } from '../lib/store';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
 import {
+  ConfirmDialog,
   DataTable,
   EmptyState,
   Meter,
@@ -38,7 +39,17 @@ function versionTone(status: string): Tone {
   if (status === 'in-review') return 'info';
   if (status === 'draft') return 'neutral';
   if (status === 'superseded') return 'neutral';
+  if (status === 'rejected') return 'err';
   return toneForStatus(status);
+}
+
+function timelineVersionPill(status: string): { tone: Tone; label: string } {
+  if (status === 'approved') return { tone: 'ok', label: 'Approved — agent-visible' };
+  if (status === 'in-review') return { tone: 'warn', label: 'In review' };
+  if (status === 'rejected') return { tone: 'err', label: 'Rejected' };
+  if (status === 'draft') return { tone: 'neutral', label: 'Draft' };
+  if (status === 'superseded') return { tone: 'neutral', label: 'Superseded' };
+  return { tone: 'neutral', label: status };
 }
 
 function proposalTone(status: string): Tone {
@@ -78,6 +89,9 @@ export default function Ontology() {
   const [semanticHits, setSemanticHits] = useState<SemanticHit[]>([]);
   const [semanticSearched, setSemanticSearched] = useState(false);
   const [semanticBusy, setSemanticBusy] = useState(false);
+
+  const [signoffConfirm, setSignoffConfirm] = useState<'approved' | 'rejected' | null>(null);
+  const [signoffBusy, setSignoffBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,6 +192,28 @@ export default function Ontology() {
     [versionRows],
   );
 
+  const inReviewVersion = useMemo(
+    () => store.ontologyVersions.find((v) => v.status === 'in-review') ?? null,
+    [store.ontologyVersions],
+  );
+
+  const timelineVersions = useMemo(() => {
+    const order: Record<string, number> = { 'in-review': 0, approved: 1, draft: 2, superseded: 3, rejected: 4 };
+    const source = store.ontologyVersions.length ? store.ontologyVersions : versionRows;
+    return [...source].sort((a, b) => (order[a.status] ?? 99) - (order[b.status] ?? 99));
+  }, [store.ontologyVersions, versionRows]);
+
+  const impact = useMemo(
+    () => ({
+      agentCount: store.agentDefs.length,
+      agentNames: store.agentDefs.map((a) => a.display_name),
+      tenantStudies: store.studies.filter((s) => s.tenant_id === tenantId).length,
+      pendingProposals: store.proposals.filter((p) => p.status === 'pending').length,
+      pendingMappings: store.mappings.filter((m) => m.review_status === 'pending').length,
+    }),
+    [store.agentDefs, store.studies, store.proposals, store.mappings, tenantId],
+  );
+
   const canManageMappings = can(role, 'mappings:manage');
   const canManageOntology = can(role, 'ontology:manage');
   const canApproveOntology = can(role, 'ontology:approve');
@@ -235,6 +271,31 @@ export default function Ontology() {
       push({ title: 'Decision failed', body: err instanceof Error ? err.message : 'Could not decide proposal.', tone: 'err' });
     } finally {
       setDecideBusyId(null);
+    }
+  }
+
+  async function handleDecideVersion(decision: 'approved' | 'rejected') {
+    if (!inReviewVersion) return;
+    setSignoffBusy(true);
+    try {
+      await api.decideOntologyVersion(inReviewVersion.version, decision, tenantId, actor);
+      push({
+        title: decision === 'approved' ? 'Ontology version approved' : 'Ontology version rejected',
+        body:
+          decision === 'approved'
+            ? `v${inReviewVersion.version} is now the only agent-visible ontology.`
+            : `v${inReviewVersion.version} rejected — agents still see the previously approved version.`,
+        tone: decision === 'approved' ? 'ok' : 'warn',
+      });
+    } catch (err) {
+      push({
+        title: 'Sign-off failed',
+        body: err instanceof Error ? err.message : 'Could not record the ontology decision.',
+        tone: 'err',
+      });
+    } finally {
+      setSignoffBusy(false);
+      setSignoffConfirm(null);
     }
   }
 
@@ -918,20 +979,135 @@ export default function Ontology() {
       {tab === 'governance' && (
         <div>
           <div className="card" style={{ marginBottom: 14 }}>
-            <strong>Agent-visible ontology:</strong>{' '}
-            <span>
-              Agents see <strong>ONLY</strong> the approved version
-              {approvedVersion ? (
-                <>
-                  {' '}
-                  — currently <span className="mono">{approvedVersion.version}</span> ({fmtNum(approvedVersion.classes)}{' '}
-                  classes · {fmtNum(approvedVersion.properties)} properties).
-                </>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <span>
+                <strong>Agent-visible ontology:</strong>{' '}
+                <span>
+                  Agents see <strong>ONLY</strong> the approved version
+                  {approvedVersion ? (
+                    <>
+                      {' '}
+                      — currently <span className="mono">{approvedVersion.version}</span> ({fmtNum(approvedVersion.classes)}{' '}
+                      classes · {fmtNum(approvedVersion.properties)} properties).
+                    </>
+                  ) : (
+                    <> — no approved version found.</>
+                  )}{' '}
+                  Draft and in-review versions are not visible to agents until approved.
+                </span>
+              </span>
+              <Pill tone="info" testId="agents-ontology-chip">
+                {approvedVersion
+                  ? `Agents see approved only: v${approvedVersion.version}`
+                  : 'Agents see approved only: none approved'}
+              </Pill>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 14 }}>
+            <SectionTitle
+              title="Version timeline"
+              sub="Governance history in decision order — what agents see, what is waiting for sign-off, and what was superseded or rejected."
+            />
+            <div data-testid="ontology-version-timeline">
+              {timelineVersions.length === 0 ? (
+                <p className="muted">No ontology versions.</p>
               ) : (
-                <> — no approved version found.</>
-              )}{' '}
-              Draft and in-review versions are not visible to agents until approved.
-            </span>
+                <ul className="list">
+                  {timelineVersions.map((v) => {
+                    const pill = timelineVersionPill(v.status);
+                    const decidedMeta = v.decided_at
+                      ? `decided ${fmtDate(v.decided_at)}${v.decided_by ? ` by ${v.decided_by}` : ''}`
+                      : v.published_at
+                        ? `published ${fmtDate(v.published_at)}`
+                        : 'not published yet';
+                    return (
+                      <li key={v.version} style={{ padding: '8px 0', borderBottom: '1px solid var(--border, #e5e7eb)' }}>
+                        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <span>
+                            <span className="mono">
+                              <strong>{v.version}</strong>
+                            </span>{' '}
+                            <Pill tone={pill.tone}>{pill.label}</Pill>{' '}
+                            {v.status === 'approved' ? (
+                              <Pill tone="ok" testId="ontology-agent-visible-pill">
+                                Agents see this version
+                              </Pill>
+                            ) : null}
+                            <br />
+                            <span className="muted">
+                              {fmtNum(v.classes)} classes · {fmtNum(v.properties)} properties · {decidedMeta} · by {v.author}
+                            </span>
+                            <br />
+                            <span>{v.notes}</span>
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 14 }} data-testid="ontology-signoff-queue">
+            <SectionTitle
+              title={inReviewVersion ? `Sign-off queue — v${inReviewVersion.version} in review` : 'Sign-off queue'}
+              sub="Ontology version decisions are demo-state only in this console."
+            />
+            {inReviewVersion ? (
+              <div>
+                <div data-testid="ontology-impact">
+                  <p style={{ marginTop: 0 }}>
+                    <strong>Impact preview — approving v{inReviewVersion.version}:</strong>
+                  </p>
+                  <ul className="list">
+                    <li>
+                      Agents that will cite this version once approved: <strong>{fmtNum(impact.agentCount)}</strong>
+                      {impact.agentNames.length ? <> ({impact.agentNames.join(', ')})</> : null}
+                    </li>
+                    <li>
+                      Studies in this tenant: <strong>{fmtNum(impact.tenantStudies)}</strong>
+                    </li>
+                    <li>
+                      Pending change proposals: <strong>{fmtNum(impact.pendingProposals)}</strong>
+                    </li>
+                    <li>
+                      Pending mappings: <strong>{fmtNum(impact.pendingMappings)}</strong>
+                    </li>
+                  </ul>
+                </div>
+                <p className="muted">
+                  Demo-state decision — recorded in the demo audit log only; the backend governance registry is unchanged
+                  until the platform is deployed.
+                </p>
+                {!canApproveOntology ? (
+                  <p className="muted">Sign-off requires ontology:approve (Biostatistician / Admin roles)</p>
+                ) : null}
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="ontology-approve-btn"
+                    disabled={!canApproveOntology || signoffBusy}
+                    onClick={() => setSignoffConfirm('approved')}
+                  >
+                    Approve version
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-testid="ontology-reject-btn"
+                    disabled={!canApproveOntology || signoffBusy}
+                    onClick={() => setSignoffConfirm('rejected')}
+                  >
+                    Reject version
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="muted">No version awaiting sign-off.</p>
+            )}
           </div>
 
           <div className="card">
@@ -1023,6 +1199,45 @@ export default function Ontology() {
           </div>
         </div>
       )}
+
+      {signoffConfirm && inReviewVersion ? (
+        <ConfirmDialog
+          title={signoffConfirm === 'approved' ? `Approve ontology v${inReviewVersion.version}` : `Reject ontology v${inReviewVersion.version}`}
+          body={
+            signoffConfirm === 'approved' ? (
+              <span>
+                Approving makes v{inReviewVersion.version} the ONLY agent-visible ontology.
+                {approvedVersion ? (
+                  <>
+                    {' '}
+                    The currently approved version (v{approvedVersion.version}) becomes superseded. Agents and new regulatory
+                    studies will pin v{inReviewVersion.version}.
+                  </>
+                ) : (
+                  <> Agents and new regulatory studies will pin v{inReviewVersion.version}.</>
+                )}
+              </span>
+            ) : (
+              <span>
+                Rejecting v{inReviewVersion.version} keeps it invisible to agents. The currently approved version
+                {approvedVersion ? (
+                  <>
+                    {' '}
+                    (v{approvedVersion.version}) stays agent-visible.
+                  </>
+                ) : (
+                  <> remains unchanged.</>
+                )}{' '}
+                This decision is recorded in the demo audit log only.
+              </span>
+            )
+          }
+          confirmLabel={signoffConfirm === 'approved' ? 'Approve version' : 'Reject version'}
+          danger={false}
+          onConfirm={() => void handleDecideVersion(signoffConfirm)}
+          onCancel={() => setSignoffConfirm(null)}
+        />
+      ) : null}
 
       {tab === 'search' && (
         <div>

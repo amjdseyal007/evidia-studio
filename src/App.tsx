@@ -4,6 +4,7 @@ import { MODE, api } from './lib/api';
 import { SessionProvider, useSession } from './lib/session';
 import { ROLES, can, type Permission, type Role } from './lib/permissions';
 import { Modal, ToastProvider, useToasts } from './components/ui';
+import CommandPalette from './components/CommandPalette';
 import { useStore } from './lib/store';
 import { isServiceEnabled, serviceBlockers, serviceDef, type ServiceKey } from './fixtures/services';
 import Login from './views/Login';
@@ -97,8 +98,20 @@ function Shell() {
   const [notifMenu, setNotifMenu] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
   const [bgReason, setBgReason] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [, setTick] = useState(0);
   const actor = user?.email ?? 'unknown';
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -178,6 +191,9 @@ function Shell() {
             <span className="muted"> · {store.tenants.find((t) => t.tenant_id === tenantId)?.display_name ?? tenantId}</span>
           </div>
           <div className="spacer" />
+          <button type="button" className="btn palette-trigger" data-testid="cmdk-open" onClick={() => setPaletteOpen(true)} aria-label="Open search (Cmd-K)">
+            ⌕ Search <kbd className="palette-kbd">⌘K</kbd>
+          </button>
           <div className="tenant-switcher">
             <label htmlFor="tenant-select" className="muted">Tenant</label>
             <select id="tenant-select" data-testid="tenant-switcher" className="select input-sm"
@@ -275,7 +291,7 @@ function Shell() {
             <Route path="/studies" element={<Guard perm="studies:view" role={role}><Studies tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
             <Route path="/studies/:studyId" element={<Guard perm="studies:view" role={role}><Studies tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
             <Route path="/agents" element={<Guard perm="agents:view" role={role}><ServiceGuard serviceKey="agents" tenantId={tenantId}><AgentConsole tenantId={tenantId} actor={actor} role={effRole} /></ServiceGuard></Guard>} />
-            <Route path="/evidence" element={<Guard perm="evidence:view" role={role}><ServiceGuard serviceKey="evidence" tenantId={tenantId}><Evidence tenantId={tenantId} role={effRole} /></ServiceGuard></Guard>} />
+            <Route path="/evidence" element={<Guard perm="evidence:view" role={role}><ServiceGuard serviceKey="evidence" tenantId={tenantId}><Evidence tenantId={tenantId} role={effRole} actor={actor} /></ServiceGuard></Guard>} />
             <Route path="/delivery" element={<Guard perm="delivery:view" role={role}><Delivery actor={actor} role={role} /></Guard>} />
             <Route path="/control" element={<Guard perm="controlplane:view" role={role}><ControlPlane tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
             <Route path="/users" element={<Guard perm="users:view" role={role}><Users tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
@@ -301,6 +317,7 @@ function Shell() {
               </div>
             </Modal>
           ) : null}
+          {paletteOpen ? <CommandPalette tenantId={tenantId} onClose={() => setPaletteOpen(false)} /> : null}
         </main>
         <footer className="footer-note">
           Evidia Studio — enterprise console (demo build). {MODE === 'live'

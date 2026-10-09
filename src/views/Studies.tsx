@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, type ProductEntitlement, type StudySummary } from '../lib/api';
-import { useStore } from '../lib/store';
+import { useStore, type StudyClassification } from '../lib/store';
 import { can, type Role } from '../lib/permissions';
 import {
   DataTable,
   EmptyState,
   Meter,
+  Modal,
   Pill,
   SectionTitle,
   SkeletonRows,
@@ -29,6 +30,7 @@ type StudyRow = {
   study_id: string;
   name: string;
   status: string;
+  classification?: StudyClassification;
   cohort_final_count: number | null;
   updated_at: string;
 };
@@ -88,6 +90,15 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
   const [entitlements, setEntitlements] = useState<ProductEntitlement[] | null>(null);
   const [entitlementsError, setEntitlementsError] = useState<string | null>(null);
   const [loadingEntitlements, setLoadingEntitlements] = useState(true);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createClass, setCreateClass] = useState<StudyClassification>('standard');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [classifyOpen, setClassifyOpen] = useState(false);
+  const [classifyLevel, setClassifyLevel] = useState<StudyClassification>('standard');
+  const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [classifyBusy, setClassifyBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -99,9 +110,10 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
     return () => { alive = false; };
   }, [tenantId]);
 
+  const approvedVersion = useMemo(() => store.ontologyVersions.find((v) => v.status === 'approved') ?? null, [store.ontologyVersions]);
   const tenantStudies = useMemo(() => store.studies.filter((s) => s.tenant_id === tenantId), [store.studies, tenantId]);
   const studyRows: StudyRow[] = useMemo(() => tenantStudies.map((s) => ({
-    study_id: s.study_id, name: s.name, status: s.status, cohort_final_count: s.cohort_final_count, updated_at: s.updated_at,
+    study_id: s.study_id, name: s.name, status: s.status, classification: s.classification, cohort_final_count: s.cohort_final_count, updated_at: s.updated_at,
   })), [tenantStudies]);
   const agentDefsByName = useMemo(() => {
     const map = new Map<string, string>();
@@ -119,6 +131,52 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
   const canViewAgents = can(role, 'agents:view');
   const canViewEvidence = can(role, 'evidence:view');
   const canSignEvidence = can(role, 'evidence:sign');
+  const canClassify = can(role, 'evidence:sign') || can(role, 'agents:run');
+  const canCreateStudy = can(role, 'cohorts:edit') || can(role, 'agents:run');
+
+  async function handleCreateStudy() {
+    const name = createName.trim();
+    if (!name) {
+      setCreateError('Study name is required.');
+      return;
+    }
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const created = await api.createStudy({ name, tenant_id: tenantId, classification: createClass }, actor);
+      push({ title: 'Study created', body: `${created.name} · ${created.classification ?? createClass}`, tone: 'ok' });
+      setCreateOpen(false);
+      setCreateName('');
+      setCreateClass('standard');
+      setCreateError(null);
+      navigate(`/studies/${created.study_id}`);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create study.');
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  async function handleClassifyStudy(studyIdToClassify: string) {
+    setClassifyBusy(true);
+    setClassifyError(null);
+    try {
+      const updated = await api.classifyStudy(studyIdToClassify, classifyLevel, actor);
+      push({
+        title: 'Study classified',
+        body: classifyLevel === 'regulatory'
+          ? `Regulatory — pinned to ontology v${updated.ontology_version ?? approvedVersion?.version ?? ''}; retention locked.`
+          : 'Standard classification applied.',
+        tone: 'ok',
+      });
+      setClassifyOpen(false);
+      setClassifyError(null);
+    } catch (err) {
+      setClassifyError(err instanceof Error ? err.message : 'Failed to classify study.');
+    } finally {
+      setClassifyBusy(false);
+    }
+  }
 
   const studyColumns: Array<Column<StudyRow>> = [
     {
@@ -132,6 +190,15 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
           <span className="mono muted">{r.study_id}</span>
         </span>
       ),
+    },
+    {
+      key: 'classification',
+      label: 'Classification',
+      sortValue: (r) => r.classification ?? 'standard',
+      render: (r) => {
+        const isReg = (r.classification ?? 'standard') === 'regulatory';
+        return <Pill tone={isReg ? 'warn' : 'neutral'} testId={`study-classification-${r.study_id}`}>{isReg ? 'Regulatory' : 'Standard'}</Pill>;
+      },
     },
     {
       key: 'status',
@@ -184,6 +251,23 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
     }
 
     const controlArm = controlArmFor(study);
+    const studyClassification: StudyClassification = study.classification ?? 'standard';
+    const isRegulatory = studyClassification === 'regulatory';
+    const hasTenantData = store.datasets.some((d) => d.tenant_id === tenantId) || store.connectors.some((c) => c.tenant_id === tenantId);
+    const hasSavedCohort = store.savedCohorts.some((c) => c.tenant_id === tenantId);
+    const feasibilityDone = study.status !== 'feasibility' || study.cohort_final_count != null;
+    const controlArmDone = ['dossier_draft', 'qa_review', 'delivered'].includes(study.status);
+    const evidenceSigned = store.evidence.signatures.length > 0;
+    const classifiedDone = study.classification === 'regulatory';
+    const checklistItems: Array<{ key: string; label: string; hint: string; done: boolean; to?: string; isClassify?: boolean }> = [
+      { key: 'data', label: 'Data loaded or connected', hint: 'Load a dataset or connect a source to start the pipeline.', done: hasTenantData, to: '/pipeline' },
+      { key: 'cohort', label: 'Cohort built & saved', hint: 'Build and save a cohort definition for this tenant.', done: hasSavedCohort, to: '/cohorts' },
+      { key: 'feasibility', label: 'Feasibility run', hint: 'Run a feasibility pass to size the cohort before generation.', done: feasibilityDone, to: '/agents' },
+      { key: 'control', label: 'Control arm generated', hint: 'Generate the synthetic / external control arm for this study.', done: controlArmDone, to: '/agents' },
+      { key: 'evidence', label: 'Evidence package signed', hint: 'Sign the Part 11 evidence package so it can be exported.', done: evidenceSigned, to: '/evidence' },
+      { key: 'classified', label: 'Classified (Regulatory ready)', hint: isRegulatory ? 'Regulatory classification pinned to the approved ontology with retention lock.' : 'Optional for Standard studies — classify as Regulatory when ready for submission.', done: classifiedDone, isClassify: true },
+    ];
+    const checklistDoneCount = checklistItems.filter((i) => i.done).length;
     return (
       <section data-testid="study-detail">
         <SectionTitle title={study.name}
@@ -286,7 +370,124 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
               )}
             </div>
           </div>
+
+          <div className="card" data-testid="study-classification-card">
+            <h3>Regulatory classification</h3>
+            <div className="row" style={{ marginTop: 8 }}>
+              <Pill tone={isRegulatory ? 'warn' : 'neutral'} testId="study-classification-pill">{isRegulatory ? 'Regulatory' : 'Standard'}</Pill>
+              <Pill tone={study.retention_locked ? 'warn' : 'neutral'}>{study.retention_locked ? 'Retention locked' : 'Standard retention'}</Pill>
+            </div>
+            <p style={{ marginTop: 8 }}>{study.ontology_version ? `Pinned ontology: v${study.ontology_version} (approved)` : 'Not pinned'}</p>
+            <p className="muted">Classification decides how the study is handled for evidence export and retention.</p>
+            <ul className="list" style={{ marginTop: 8 }}>
+              <li>Approved ontology version — Regulatory pins {approvedVersion ? `v${approvedVersion.version}` : 'the currently approved version'} at classification time.</li>
+              <li>Retention lock — Regulatory locks retention; Standard keeps standard retention.</li>
+              <li>Part 11 sign-off chain — Regulatory exports require the signed hash-chain to be complete.</li>
+            </ul>
+            <div className="row" style={{ marginTop: 12 }}>
+              {canClassify ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  data-testid="classify-btn"
+                  onClick={() => { setClassifyLevel(studyClassification); setClassifyError(null); setClassifyOpen(true); }}
+                >
+                  {study.classification ? 'Change classification' : 'Classify study'}
+                </button>
+              ) : (
+                <span className="muted">Classification changes require a privileged role</span>
+              )}
+            </div>
+          </div>
+
+          <div className="card" data-testid="study-checklist">
+            <h3>Getting started — {checklistDoneCount} of 6</h3>
+            <div className="row" style={{ marginTop: 8 }}>
+              <Meter value={checklistDoneCount} max={6} label="Getting started progress" />
+              <span className="muted">{checklistDoneCount} of 6 complete</span>
+            </div>
+            <ul className="checklist" style={{ marginTop: 10 }}>
+              {checklistItems.map((item) => (
+                <li key={item.key}>
+                  <span className={item.done ? 'check' : ''}>{item.done ? '✓' : '○'}</span>
+                  <span style={{ flex: 1 }}>
+                    <strong>{item.label}</strong>
+                    <br />
+                    <span className="muted">{item.hint}</span>
+                  </span>
+                  {item.isClassify ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => { if (canClassify) { setClassifyLevel(studyClassification); setClassifyError(null); setClassifyOpen(true); } }}
+                      disabled={!canClassify}
+                    >
+                      Classify
+                    </button>
+                  ) : item.to ? (
+                    <Link to={item.to} className="btn btn-sm btn-ghost">Open</Link>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
+
+        {classifyOpen ? (
+          <Modal title="Classify study" onClose={() => setClassifyOpen(false)} testId="classify-modal">
+            <p className="muted">Set the handling class for <strong>{study.name}</strong> (<span className="mono">{study.study_id}</span>). Regulatory studies are pinned to the approved ontology and retention-locked; Standard studies stay exploratory.</p>
+            <div className="field">
+              <span className="muted" style={{ fontWeight: 600 }}>Classification</span>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+                <input
+                  type="radio"
+                  name="classify-level"
+                  value="standard"
+                  data-testid="classify-class-standard"
+                  checked={classifyLevel === 'standard'}
+                  onChange={() => setClassifyLevel('standard')}
+                />
+                Standard — internal / exploratory; no ontology pin, standard retention.
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+                <input
+                  type="radio"
+                  name="classify-level"
+                  value="regulatory"
+                  data-testid="classify-class-regulatory"
+                  checked={classifyLevel === 'regulatory'}
+                  onChange={() => setClassifyLevel('regulatory')}
+                />
+                Regulatory — submission-ready handling.
+              </label>
+            </div>
+            {classifyLevel === 'regulatory' ? (
+              <div style={{ marginTop: 8 }}>
+                <p className="muted">Regulatory requirements:</p>
+                <ul className="list">
+                  <li>Approved ontology version: {approvedVersion ? `v${approvedVersion.version} (approved) will be pinned.` : 'No approved ontology version available — approve one in Ontology → Governance first.'}</li>
+                  <li>Retention lock will be applied and cannot be shortened without reclassification.</li>
+                  <li>Part 11 sign-off chain must be complete before the evidence export is considered ready.</li>
+                </ul>
+                {!approvedVersion ? <p className="error">Regulatory classification requires an approved ontology version — none is approved yet.</p> : null}
+              </div>
+            ) : (
+              <p className="muted">Standard classification clears any ontology pin and retention lock.</p>
+            )}
+            {classifyError ? <p className="error" role="alert">{classifyError}</p> : null}
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setClassifyOpen(false)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={classifyBusy || (classifyLevel === 'regulatory' && !approvedVersion)}
+                onClick={() => void handleClassifyStudy(study.study_id)}
+              >
+                {classifyBusy ? 'Classifying…' : 'Confirm classification'}
+              </button>
+            </div>
+          </Modal>
+        ) : null}
       </section>
     );
   }
@@ -295,7 +496,17 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
   return (
     <section>
       <SectionTitle title="Products & Studies"
-        sub={`Portfolio P0–P3 with entitlements for tenant ${tenantId} · signed in as ${actor} (${role})`} />
+        sub={`Portfolio P0–P3 with entitlements for tenant ${tenantId} · signed in as ${actor} (${role})`}
+        actions={canCreateStudy ? (
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            data-testid="new-study-btn"
+            onClick={() => { setCreateError(null); setCreateName(''); setCreateClass('standard'); setCreateOpen(true); }}
+          >
+            New study
+          </button>
+        ) : undefined} />
 
       {loadingEntitlements ? (
         <div className="card"><SkeletonRows n={4} /></div>
@@ -353,6 +564,54 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
             testId="studies-table" emptyText="No studies for this tenant." pageSize={8} />
         )}
       </div>
+
+      {createOpen ? (
+        <Modal title="New study" onClose={() => setCreateOpen(false)} testId="create-study-modal">
+          <div className="field">
+            <label htmlFor="new-study-name">Study name</label>
+            <input
+              id="new-study-name"
+              className="input"
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              placeholder="e.g. External control — cohort B"
+            />
+          </div>
+          <div className="field">
+            <span className="muted" style={{ fontWeight: 600 }}>Classification</span>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+              <input
+                type="radio"
+                name="new-study-class"
+                value="standard"
+                data-testid="new-study-class-standard"
+                checked={createClass === 'standard'}
+                onChange={() => setCreateClass('standard')}
+              />
+              Standard — internal / exploratory; no ontology pin.
+            </label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+              <input
+                type="radio"
+                name="new-study-class"
+                value="regulatory"
+                data-testid="new-study-class-regulatory"
+                checked={createClass === 'regulatory'}
+                onChange={() => setCreateClass('regulatory')}
+              />
+              Regulatory — submission-ready handling.
+            </label>
+            <p className="hint">Regulatory pins the approved ontology version {approvedVersion ? `v${approvedVersion.version} (approved)` : '(none approved yet)'} and locks retention. Standard studies keep the default retention and no pin.</p>
+          </div>
+          {createError ? <p className="error" role="alert">{createError}</p> : null}
+          <div className="modal-actions">
+            <button type="button" className="btn" onClick={() => setCreateOpen(false)}>Cancel</button>
+            <button type="button" className="btn btn-primary" disabled={createBusy} onClick={() => void handleCreateStudy()}>
+              {createBusy ? 'Creating…' : 'Create study'}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </section>
   );
 }

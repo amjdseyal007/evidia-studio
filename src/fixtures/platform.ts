@@ -31,6 +31,9 @@ export interface UserRecord {
   name: string;
   email: string;
   role: Role;
+  /** Optional custom (cloned) role assigned in Users & Access; when set it
+   *  is the role shown for this user and its permission set applies. */
+  custom_role_id?: string | null;
   tenant_id: string;
   status: 'active' | 'invited' | 'deactivated';
   cognito_groups: string[];
@@ -77,6 +80,10 @@ export interface ConnectorRecord {
   enabled: boolean;
   capabilities: ConnectorCapability[];
   config: Record<string, string>;
+  /** Catalog metadata (connector catalog): packaged version. */
+  version: string;
+  /** Data-handling disclosure: what crosses the tenant boundary. */
+  data_handling: string;
   last_test: { at: string; ok: boolean; latency_ms: number } | null;
   created_at: string;
 }
@@ -108,6 +115,9 @@ export interface ApiKeyRecord {
   tenant_id: string;
   name: string;
   prefix: string;
+  /** Permission scopes (service-account model): the key can only call
+   *  what its scopes allow. Empty = legacy unscoped demo key. */
+  scopes: string[];
   created_at: string;
   last_used: string | null;
   status: 'active' | 'revoked';
@@ -216,10 +226,10 @@ export const pipelineRunSeed: PipelineRun[] = [
 ];
 
 export const connectorSeed: ConnectorRecord[] = [
-  { connector_id: 'conn-snowflake-acme', tenant_id: 'acme_rare', name: 'Acme Snowflake warehouse', type: 'snowflake', mode: 'land', status: 'connected', enabled: true, capabilities: ['pushdown', 'incremental'], config: { account: 'acme-rare.us-east-1', warehouse: 'EVIDIA_WH', database: 'RWE_PROD', secret_ref: 'evidia/tenants/acme_rare/snowflake (Secrets Manager)' }, last_test: { at: '2026-10-08T07:30:00Z', ok: true, latency_ms: 388 }, created_at: '2026-09-20T10:00:00Z' },
-  { connector_id: 'conn-databricks-beacon', tenant_id: 'beacon_bio', name: 'Beacon Databricks workspace', type: 'databricks', mode: 'virtual', status: 'connected', enabled: true, capabilities: ['virtual', 'pushdown'], config: { workspace: 'beacon.cloud.databricks.com', catalog: 'rwe_catalog', secret_ref: 'evidia/tenants/beacon_bio/databricks (Secrets Manager)' }, last_test: { at: '2026-10-08T08:12:00Z', ok: true, latency_ms: 441 }, created_at: '2026-09-30T09:00:00Z' },
-  { connector_id: 'conn-foundry-acme', tenant_id: 'acme_rare', name: 'Acme Foundry (ontology sync)', type: 'foundry', mode: 'virtual', status: 'unknown', enabled: false, capabilities: ['virtual'], config: { stack: 'acme.palantirfoundry.com', secret_ref: 'evidia/tenants/acme_rare/foundry (Secrets Manager)' }, last_test: null, created_at: '2026-10-05T13:00:00Z' },
-  { connector_id: 'conn-rest-beacon', tenant_id: 'beacon_bio', name: 'Beacon lab REST feed', type: 'rest', mode: 'land', status: 'error', enabled: true, capabilities: ['incremental'], config: { base_url: 'https://labs.beacon.example/api/v2', secret_ref: 'evidia/tenants/beacon_bio/labs-rest (Secrets Manager)' }, last_test: { at: '2026-10-06T21:58:00Z', ok: false, latency_ms: 1204 }, created_at: '2026-10-01T16:20:00Z' },
+  { connector_id: 'conn-snowflake-acme', tenant_id: 'acme_rare', name: 'Acme Snowflake warehouse', type: 'snowflake', mode: 'land', status: 'connected', enabled: true, capabilities: ['pushdown', 'incremental'], config: { account: 'acme-rare.us-east-1', warehouse: 'EVIDIA_WH', database: 'RWE_PROD', secret_ref: 'evidia/tenants/acme_rare/snowflake (Secrets Manager)' }, version: '1.4.0', data_handling: 'LAND mode: queried rows land in the tenant S3 bronze prefix inside the tenant boundary. Credentials never leave Secrets Manager; only OMOP-harmonized outputs are readable by agents.', last_test: { at: '2026-10-08T07:30:00Z', ok: true, latency_ms: 388 }, created_at: '2026-09-20T10:00:00Z' },
+  { connector_id: 'conn-databricks-beacon', tenant_id: 'beacon_bio', name: 'Beacon Databricks workspace', type: 'databricks', mode: 'virtual', status: 'connected', enabled: true, capabilities: ['virtual', 'pushdown'], config: { workspace: 'beacon.cloud.databricks.com', catalog: 'rwe_catalog', secret_ref: 'evidia/tenants/beacon_bio/databricks (Secrets Manager)' }, version: '1.1.2', data_handling: 'VIRTUAL mode: data stays in the tenant Databricks workspace; Evidia issues Delta Sharing / SQL reads and receives aggregates + approved extracts only. No bulk copy crosses the boundary.', last_test: { at: '2026-10-08T08:12:00Z', ok: true, latency_ms: 441 }, created_at: '2026-09-30T09:00:00Z' },
+  { connector_id: 'conn-foundry-acme', tenant_id: 'acme_rare', name: 'Acme Foundry (ontology sync)', type: 'foundry', mode: 'virtual', status: 'unknown', enabled: false, capabilities: ['virtual'], config: { stack: 'acme.palantirfoundry.com', secret_ref: 'evidia/tenants/acme_rare/foundry (Secrets Manager)' }, version: '0.9.0', data_handling: 'VIRTUAL mode: ontology sync only — class/property metadata crosses to align the Foundry ontology with the approved Evidia ontology. No patient-level data moves.', last_test: null, created_at: '2026-10-05T13:00:00Z' },
+  { connector_id: 'conn-rest-beacon', tenant_id: 'beacon_bio', name: 'Beacon lab REST feed', type: 'rest', mode: 'land', status: 'error', enabled: true, capabilities: ['incremental'], config: { base_url: 'https://labs.beacon.example/api/v2', secret_ref: 'evidia/tenants/beacon_bio/labs-rest (Secrets Manager)' }, version: '2.0.1', data_handling: 'LAND mode: incremental pulls land in the tenant S3 bronze prefix. Payloads are de-identified at the silver gate before any agent can read them.', last_test: { at: '2026-10-06T21:58:00Z', ok: false, latency_ms: 1204 }, created_at: '2026-10-01T16:20:00Z' },
 ];
 
 export const productSeed: ProductRecord[] = [
@@ -284,8 +294,8 @@ export const serviceSeed: ServiceHealth[] = [
 ];
 
 export const apiKeySeed: ApiKeyRecord[] = [
-  { key_id: 'key-seed-1', tenant_id: 'acme_rare', name: 'CI automation (demo)', prefix: 'evk_live_a1b2', created_at: '2026-09-22T10:00:00Z', last_used: '2026-10-08T06:12:00Z', status: 'active' },
-  { key_id: 'key-seed-2', tenant_id: 'acme_rare', name: 'Analyst workstation (demo)', prefix: 'evk_live_c3d4', created_at: '2026-10-01T09:30:00Z', last_used: null, status: 'active' },
+  { key_id: 'key-seed-1', tenant_id: 'acme_rare', name: 'CI automation (demo)', prefix: 'evk_live_a1b2', scopes: ['pipeline:view', 'pipeline:run', 'dashboard:view'], created_at: '2026-09-22T10:00:00Z', last_used: '2026-10-08T06:12:00Z', status: 'active' },
+  { key_id: 'key-seed-2', tenant_id: 'acme_rare', name: 'Analyst workstation (demo)', prefix: 'evk_live_c3d4', scopes: ['dashboard:view', 'cohorts:view', 'studies:view', 'evidence:view'], created_at: '2026-10-01T09:30:00Z', last_used: null, status: 'active' },
 ];
 
 export const notificationSeed: NotificationItem[] = [

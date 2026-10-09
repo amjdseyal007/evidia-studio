@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { api, type TeamRecord, type UserRecord } from '../lib/api';
+import { api, type AccessRequest, type CustomRoleDef, type TeamRecord, type UserRecord } from '../lib/api';
 import { useStore } from '../lib/store';
-import { PERMISSIONS, PERMISSION_LABELS, ROLES, can, type Role } from '../lib/permissions';
+import { PERMISSIONS, PERMISSION_LABELS, ROLES, can, permissionsForRole, type Permission, type Role } from '../lib/permissions';
 import { ConfirmDialog, DataTable, Modal, Pill, SectionTitle, fmtDate, toneForStatus, useToasts, type Column } from '../components/ui';
 
 type UserRow = {
@@ -14,7 +14,34 @@ type UserRow = {
   cognito_groups: string[];
   last_login: string | null;
   created_at: string;
+  custom_role_id?: string | null;
 };
+
+const SECTION_BY_PERM: Array<[Permission, string]> = [
+  ['dashboard:view', 'Dashboard'],
+  ['cohorts:view', 'Cohorts'],
+  ['cohorts:edit', 'Cohorts'],
+  ['studies:view', 'Products & Studies'],
+  ['agents:view', 'Agents'],
+  ['evidence:view', 'Evidence & Compliance'],
+  ['pipeline:view', 'Data Pipeline'],
+  ['connectors:view', 'Connectors'],
+  ['ontology:view', 'Ontology'],
+  ['users:view', 'Users & Access'],
+  ['controlplane:view', 'Control Plane'],
+  ['settings:manage', 'Settings'],
+  ['delivery:view', 'Delivery Admin'],
+  ['audit:view', 'Audit trail (in Evidence & Control Plane)'],
+  ['billing:view', 'Billing (in Control Plane)'],
+];
+
+function visibleSections(perms: Permission[]): string[] {
+  const out: string[] = [];
+  for (const [perm, label] of SECTION_BY_PERM) {
+    if (perms.includes(perm) && !out.includes(label)) out.push(label);
+  }
+  return out;
+}
 
 export default function Users({ tenantId, actor, role }: { tenantId: string; actor: string; role: Role }) {
   const store = useStore();
@@ -38,10 +65,29 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
   const [teamStudyIds, setTeamStudyIds] = useState<string[]>([]);
   const [teamNameError, setTeamNameError] = useState<string | null>(null);
   const [creatingTeam, setCreatingTeam] = useState(false);
+  const [crOpen, setCrOpen] = useState(false);
+  const [crMode, setCrMode] = useState<'create' | 'edit'>('create');
+  const [crEditingId, setCrEditingId] = useState<string | null>(null);
+  const [crName, setCrName] = useState('');
+  const [crDesc, setCrDesc] = useState('');
+  const [crClone, setCrClone] = useState<Role>('Auditor');
+  const [crPerms, setCrPerms] = useState<Permission[]>(() => permissionsForRole('Auditor'));
+  const [crError, setCrError] = useState<string | null>(null);
+  const [crSubmitting, setCrSubmitting] = useState(false);
+  const [deletingRole, setDeletingRole] = useState<CustomRoleDef | null>(null);
+  const [previewRoleId, setPreviewRoleId] = useState<string | null>(null);
+  const [arOpen, setArOpen] = useState(false);
+  const [arRoleValue, setArRoleValue] = useState('preset:Auditor');
+  const [arReason, setArReason] = useState('');
+  const [arSubmitting, setArSubmitting] = useState(false);
 
   const manageAllowed = can(role, 'users:manage');
   const manageTeams = can(role, 'teams:manage');
   const tenantUsers = store.users.filter((u) => u.tenant_id === tenantId);
+  const tenantCustomRoles = store.customRoles.filter((r) => r.tenant_id === tenantId);
+  const tenantAccessRequests = store.accessRequests.filter((r) => r.tenant_id === tenantId);
+  const pendingRequests = tenantAccessRequests.filter((r) => r.status === 'pending');
+  const decidedRequests = tenantAccessRequests.filter((r) => r.status !== 'pending');
   const tenantTeams = store.teams.filter((t) => t.tenant_id === tenantId);
   const tenantDatasets = store.datasets.filter((d) => d.tenant_id === tenantId);
   const tenantStudies = store.studies.filter((s) => s.tenant_id === tenantId);
@@ -57,6 +103,7 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
     cognito_groups: u.cognito_groups,
     last_login: u.last_login,
     created_at: u.created_at,
+    custom_role_id: u.custom_role_id ?? null,
   }));
 
   async function handleRoleChange(user: UserRow, next: Role) {
@@ -65,6 +112,118 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
       push({ title: 'Role updated', body: `${user.name} is now ${next} (demo).`, tone: 'ok' });
     } catch {
       push({ title: 'Role change failed', body: 'The demo store rejected the role change.', tone: 'err' });
+    }
+  }
+
+  async function handleAssignCustom(user: UserRow, value: string) {
+    try {
+      await api.assignCustomRole(user.user_id, value || null, actor);
+      const cr = value ? store.customRoles.find((r) => r.id === value) : null;
+      push({ title: 'Custom role updated', body: cr ? `${user.name} now also has custom role ${cr.name} (demo).` : `${user.name} uses their preset role only (demo).`, tone: 'ok' });
+    } catch {
+      push({ title: 'Assignment failed', body: 'The demo store rejected the custom-role assignment.', tone: 'err' });
+    }
+  }
+
+  function openCreateCustomRole() {
+    setCrMode('create');
+    setCrEditingId(null);
+    setCrName('');
+    setCrDesc('');
+    setCrClone('Auditor');
+    setCrPerms(permissionsForRole('Auditor'));
+    setCrError(null);
+    setCrOpen(true);
+  }
+
+  function openEditCustomRole(r: CustomRoleDef) {
+    setCrMode('edit');
+    setCrEditingId(r.id);
+    setCrName(r.name);
+    setCrDesc(r.description);
+    setCrClone(r.cloned_from ?? 'Auditor');
+    setCrPerms([...r.permissions]);
+    setCrError(null);
+    setCrOpen(true);
+  }
+
+  async function submitCustomRole() {
+    if (!crName.trim()) {
+      setCrError('Name is required.');
+      return;
+    }
+    if (crPerms.length === 0) {
+      setCrError('Select at least one permission.');
+      return;
+    }
+    setCrError(null);
+    setCrSubmitting(true);
+    try {
+      if (crMode === 'edit' && crEditingId) {
+        await api.updateCustomRole(crEditingId, { name: crName.trim(), description: crDesc.trim(), permissions: crPerms }, actor);
+        push({ title: 'Custom role updated', body: `${crName.trim()} saved (demo).`, tone: 'ok' });
+      } else {
+        await api.createCustomRole({ name: crName.trim(), description: crDesc.trim(), tenant_id: tenantId, cloned_from: crClone, permissions: crPerms }, actor);
+        push({ title: 'Custom role created', body: `${crName.trim()} cloned from ${crClone} with ${crPerms.length} permissions (demo).`, tone: 'ok' });
+      }
+      setCrOpen(false);
+    } catch {
+      push({ title: 'Custom role failed', body: 'The demo store rejected the custom role.', tone: 'err' });
+    } finally {
+      setCrSubmitting(false);
+    }
+  }
+
+  async function confirmDeleteRole() {
+    if (!deletingRole) return;
+    try {
+      await api.deleteCustomRole(deletingRole.id, actor);
+      push({ title: 'Custom role deleted', body: `${deletingRole.name} deleted; assignees fall back to their preset role (demo).`, tone: 'ok' });
+      if (previewRoleId === deletingRole.id) setPreviewRoleId(null);
+    } catch {
+      push({ title: 'Delete failed', body: 'The demo store rejected the deletion.', tone: 'err' });
+    } finally {
+      setDeletingRole(null);
+    }
+  }
+
+  function openRequestAccess() {
+    setArRoleValue('preset:Auditor');
+    setArReason('');
+    setArOpen(true);
+  }
+
+  async function submitAccessRequest() {
+    const [kind, ...rest] = arRoleValue.split(':');
+    const requestedRole = rest.join(':');
+    const isCustom = kind === 'custom';
+    const me = store.users.find((u) => u.email === actor);
+    setArSubmitting(true);
+    try {
+      await api.requestAccess({
+        tenant_id: tenantId,
+        user_id: me?.user_id ?? null,
+        requester_name: me?.name ?? actor,
+        requester_email: actor,
+        requested_role: requestedRole,
+        is_custom: isCustom,
+        reason: arReason.trim(),
+      }, actor);
+      push({ title: 'Access requested', body: `Requested ${requestedRole} for tenant ${tenantId} (demo). An admin will decide.`, tone: 'ok' });
+      setArOpen(false);
+    } catch {
+      push({ title: 'Request failed', body: 'The demo store rejected the access request.', tone: 'err' });
+    } finally {
+      setArSubmitting(false);
+    }
+  }
+
+  async function decideRequest(req: AccessRequest, decision: 'approved' | 'rejected') {
+    try {
+      await api.decideAccessRequest(req.id, decision, actor);
+      push({ title: `Access ${decision}`, body: `${req.requester_name} → ${req.requested_role} ${decision} (demo).`, tone: decision === 'approved' ? 'ok' : 'warn' });
+    } catch {
+      push({ title: 'Decision failed', body: 'The demo store rejected the decision.', tone: 'err' });
     }
   }
 
@@ -209,7 +368,20 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
       ),
     },
     { key: 'email', label: 'Email', sortValue: (r) => r.email, render: (r) => r.email },
-    { key: 'role', label: 'Role', sortValue: (r) => r.role, render: (r) => <Pill tone="info">{r.role}</Pill> },
+    {
+      key: 'role',
+      label: 'Role',
+      sortValue: (r) => r.role,
+      render: (r) => {
+        const cr = r.custom_role_id ? store.customRoles.find((x) => x.id === r.custom_role_id) : null;
+        return (
+          <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+            <Pill tone="info">{r.role}</Pill>
+            {cr ? <Pill tone="neutral" testId={`user-custom-role-${r.user_id}`}>{cr.name}</Pill> : null}
+          </span>
+        );
+      },
+    },
     {
       key: 'teams',
       label: 'Teams',
@@ -232,39 +404,52 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
       render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.cognito_groups.join(', ')}</span>,
     },
     { key: 'last', label: 'Last login', sortValue: (r) => r.last_login ?? '', render: (r) => fmtDate(r.last_login) },
-    ...(manageAllowed
-      ? [
-          {
-            key: 'actions',
-            label: 'Actions',
-            render: (r: UserRow) => (
-              <span className="row">
-                <select
-                  className="select input-sm"
-                  aria-label={`Role for ${r.name}`}
-                  value={r.role}
-                  onChange={(e) => void handleRoleChange(r, e.target.value as Role)}
-                >
-                  {ROLES.map((ro) => (
-                    <option key={ro} value={ro}>{ro}</option>
-                  ))}
-                </select>
-                {r.status === 'deactivated' ? (
-                  <button type="button" className="btn btn-sm" onClick={() => void handleReactivate(r)}>Reactivate</button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={() => setDeactivating(store.users.find((u) => u.user_id === r.user_id) ?? null)}
-                  >
-                    Deactivate
-                  </button>
-                )}
-              </span>
-            ),
-          } satisfies Column<UserRow>,
-        ]
-      : []),
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (r: UserRow) => (
+        <span className="row" style={{ flexWrap: 'wrap' }}>
+          {manageAllowed ? (
+            <select
+              className="select input-sm"
+              aria-label={`Role for ${r.name}`}
+              value={r.role}
+              onChange={(e) => void handleRoleChange(r, e.target.value as Role)}
+            >
+              {ROLES.map((ro) => (
+                <option key={ro} value={ro}>{ro}</option>
+              ))}
+            </select>
+          ) : null}
+          <select
+            className="select input-sm"
+            aria-label={`Custom role for ${r.name}`}
+            data-testid={`assign-custom-${r.user_id}`}
+            value={r.custom_role_id ?? ''}
+            disabled={!manageAllowed}
+            onChange={(e) => void handleAssignCustom(r, e.target.value)}
+          >
+            <option value="">Preset role</option>
+            {tenantCustomRoles.map((cr) => (
+              <option key={cr.id} value={cr.id}>{cr.name}</option>
+            ))}
+          </select>
+          {manageAllowed ? (
+            r.status === 'deactivated' ? (
+              <button type="button" className="btn btn-sm" onClick={() => void handleReactivate(r)}>Reactivate</button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                onClick={() => setDeactivating(store.users.find((u) => u.user_id === r.user_id) ?? null)}
+              >
+                Deactivate
+              </button>
+            )
+          ) : null}
+        </span>
+      ),
+    },
   ];
 
   return (
@@ -298,6 +483,102 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
         {!manageAllowed ? <p className="muted">Your role ({role}) can view this directory; user management (users:manage) requires Platform Admin or Tenant Admin in this demo gate.</p> : null}
       </div>
 
+      <div className="card" style={{ marginBottom: 14 }} data-testid="custom-roles">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Custom roles</h3>
+            <p className="muted" style={{ margin: '4px 0 0' }}>Composable roles cloned from a preset, then trimmed to the permissions a job actually needs (demo).</p>
+          </div>
+          {manageAllowed ? (
+            <button type="button" className="btn btn-primary btn-sm" data-testid="create-custom-role-btn" onClick={openCreateCustomRole}>Create custom role</button>
+          ) : null}
+        </div>
+        {!manageAllowed ? <p className="muted">Read-only — creating, editing, deleting, and assigning custom roles requires users:manage. Preview still works.</p> : null}
+        {tenantCustomRoles.length === 0 ? <p className="muted">No custom roles for this tenant yet.</p> : null}
+        {tenantCustomRoles.map((r) => {
+          const sections = visibleSections(r.permissions);
+          const open = previewRoleId === r.id;
+          return (
+            <article key={r.id} className="card" style={{ marginBottom: 10 }}>
+              <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong>{r.name}</strong>
+                <Pill tone="info">{`cloned from ${r.cloned_from ?? '—'}`}</Pill>
+                <span className="muted">{r.permissions.length} permissions</span>
+                <span className="muted">by {r.created_by}</span>
+              </div>
+              {r.description ? <p className="muted">{r.description}</p> : null}
+              <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-sm" data-testid={`custom-role-preview-${r.id}`} onClick={() => setPreviewRoleId(open ? null : r.id)}>{open ? 'Hide preview' : 'Preview'}</button>
+                {manageAllowed ? (
+                  <>
+                    <button type="button" className="btn btn-sm" data-testid={`custom-role-edit-${r.id}`} onClick={() => openEditCustomRole(r)}>Edit</button>
+                    <button type="button" className="btn btn-danger btn-sm" data-testid={`custom-role-delete-${r.id}`} onClick={() => setDeletingRole(r)}>Delete</button>
+                  </>
+                ) : null}
+              </div>
+              {open ? (
+                <div data-testid={`custom-role-preview-panel-${r.id}`} style={{ marginTop: 10 }}>
+                  <div className="muted">What can this role see?</div>
+                  <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                    {sections.length === 0 ? <span className="muted">No console sections</span> : sections.map((s) => <span key={s} className="chip">{s}</span>)}
+                  </div>
+                  <p className="muted" style={{ marginTop: 8 }}>{r.permissions.length} of {PERMISSIONS.length} permissions</p>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {r.permissions.map((p) => <li key={p}>{PERMISSION_LABELS[p]}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }} data-testid="access-requests">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Access requests</h3>
+            <p className="muted" style={{ margin: '4px 0 0' }}>People ask for a role; an admin approves or rejects. Approval applies the grant immediately (demo).</p>
+          </div>
+          <button type="button" className="btn btn-primary btn-sm" data-testid="request-access-btn" onClick={openRequestAccess}>Request access</button>
+        </div>
+        {pendingRequests.length === 0 ? <p className="muted">No pending requests.</p> : null}
+        {pendingRequests.map((r) => (
+          <article key={r.id} className="card" style={{ marginBottom: 10 }}>
+            <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <strong>{r.requester_name}</strong>
+              <span className="muted">{r.requester_email}</span>
+              <Pill tone="info">{r.requested_role}</Pill>
+              {r.is_custom ? <Pill tone="neutral">custom</Pill> : null}
+              <span className="muted">{fmtDate(r.created_at)}</span>
+            </div>
+            {r.reason ? <p className="muted">{r.reason}</p> : null}
+            {manageAllowed ? (
+              <div className="row" style={{ gap: 6, marginTop: 8 }}>
+                <button type="button" className="btn btn-primary btn-sm" data-testid={`access-approve-${r.id}`} onClick={() => void decideRequest(r, 'approved')}>Approve</button>
+                <button type="button" className="btn btn-danger btn-sm" data-testid={`access-reject-${r.id}`} onClick={() => void decideRequest(r, 'rejected')}>Reject</button>
+              </div>
+            ) : (
+              <p className="muted">Awaiting admin decision</p>
+            )}
+          </article>
+        ))}
+        {decidedRequests.length > 0 ? (
+          <div style={{ marginTop: 12 }}>
+            <div className="muted">Decided</div>
+            {decidedRequests.map((r) => (
+              <div key={r.id} className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                <strong>{r.requester_name}</strong>
+                <span className="muted">{r.requester_email}</span>
+                <Pill tone="info">{r.requested_role}</Pill>
+                {r.is_custom ? <Pill tone="neutral">custom</Pill> : null}
+                <Pill tone={toneForStatus(r.status)}>{r.status}</Pill>
+                {r.decided_by ? <span className="muted">by {r.decided_by}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
       <div className="card" style={{ marginBottom: 14 }} data-testid="teams-section">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
           <div>
@@ -325,6 +606,11 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
                 <span className="muted">{t.member_ids.length} member(s)</span>
               </div>
               {t.description ? <p className="muted">{t.description}</p> : null}
+              <p className="muted" data-testid={`team-scope-${t.team_id}`}>
+                {t.access_studies.length === 0 && t.access_datasets.length === 0
+                  ? 'No scoped grants yet — members see nothing until studies/datasets are granted.'
+                  : `Team-scoped grant: members see only this team's ${t.access_studies.length} studies · ${t.access_datasets.length} datasets`}
+              </p>
               <div style={{ marginTop: 8 }}>
                 <div className="muted">Members</div>
                 {t.member_ids.length === 0 ? (
@@ -567,6 +853,106 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
           onConfirm={() => void confirmDeleteTeam()}
           onCancel={() => setDeletingTeam(null)}
         />
+      ) : null}
+
+      {crOpen ? (
+        <Modal title={crMode === 'edit' ? 'Edit custom role' : 'Create custom role'} onClose={() => setCrOpen(false)} testId="custom-role-modal">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitCustomRole();
+            }}
+          >
+            <div className="field">
+              <label htmlFor="cr-name">Name *</label>
+              <input id="cr-name" className="input" value={crName} onChange={(e) => setCrName(e.target.value)} placeholder="e.g. Evidence Reviewer" />
+            </div>
+            <div className="field">
+              <label htmlFor="cr-desc">Description</label>
+              <input id="cr-desc" className="input" value={crDesc} onChange={(e) => setCrDesc(e.target.value)} placeholder="What this role is for" />
+            </div>
+            <div className="field">
+              <label htmlFor="cr-clone">Clone from</label>
+              <select
+                id="cr-clone"
+                className="select"
+                value={crClone}
+                disabled={crMode === 'edit'}
+                onChange={(e) => {
+                  const next = e.target.value as Role;
+                  setCrClone(next);
+                  setCrPerms(permissionsForRole(next));
+                }}
+              >
+                {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+              {crMode === 'edit' ? <span className="hint">Clone source is fixed after creation; edit name, description, and permissions.</span> : <span className="hint">Changing the clone source resets the permission checks below.</span>}
+            </div>
+            <div className="field">
+              <span className="muted">Permissions</span>
+              <div className="checklist">
+                {PERMISSIONS.map((perm) => (
+                  <label key={perm} className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      data-testid={`cr-perm-${perm}`}
+                      checked={crPerms.includes(perm)}
+                      onChange={(e) => setCrPerms((prev) => (e.target.checked ? [...prev, perm] : prev.filter((x) => x !== perm)))}
+                    />
+                    <span>{PERMISSION_LABELS[perm]} <span className="mono muted" style={{ fontSize: 11 }}>{perm}</span></span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {crError ? <span className="field-error">{crError}</span> : null}
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setCrOpen(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={crSubmitting}>{crSubmitting ? 'Saving…' : crMode === 'edit' ? 'Save role' : 'Create role'}</button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {deletingRole ? (
+        <ConfirmDialog
+          title={`Delete ${deletingRole.name}?`}
+          body={
+            <span>
+              Custom role <strong>{deletingRole.name}</strong> in tenant <span className="mono">{deletingRole.tenant_id}</span> will be deleted (demo). Anyone assigned it falls back to their preset role.
+            </span>
+          }
+          confirmLabel="Delete role"
+          danger
+          onConfirm={() => void confirmDeleteRole()}
+          onCancel={() => setDeletingRole(null)}
+        />
+      ) : null}
+
+      {arOpen ? (
+        <Modal title="Request access" onClose={() => setArOpen(false)} testId="request-access-modal">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitAccessRequest();
+            }}
+          >
+            <div className="field">
+              <label htmlFor="ar-role">Role</label>
+              <select id="ar-role" className="select" value={arRoleValue} onChange={(e) => setArRoleValue(e.target.value)}>
+                {ROLES.map((r) => <option key={`preset:${r}`} value={`preset:${r}`}>{r}</option>)}
+                {tenantCustomRoles.map((r) => <option key={`custom:${r.id}`} value={`custom:${r.name}`}>{`${r.name} (custom)`}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="ar-reason">Reason</label>
+              <textarea id="ar-reason" className="input" value={arReason} onChange={(e) => setArReason(e.target.value)} placeholder="Why do you need this role?" rows={3} />
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setArOpen(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={arSubmitting}>{arSubmitting ? 'Submitting…' : 'Submit request'}</button>
+            </div>
+          </form>
+        </Modal>
       ) : null}
     </section>
   );

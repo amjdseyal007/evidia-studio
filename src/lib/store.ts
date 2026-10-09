@@ -22,6 +22,7 @@ import {
   changeProposalSeed, conceptMappingSeed, mappingCandidateSeed, ontologyVersionSeed,
   type ChangeProposal, type ConceptMapping, type OntologyVersion,
 } from '../fixtures/ontology';
+import { accessRequestSeed, customRoleSeed, type AccessRequest, type CustomRoleDef } from '../fixtures/access';
 import {
   AGENT_SERVICE_SEED, SERVICE_SEED_STATES,
   defaultAgentStates, defaultServiceStates, serviceDef,
@@ -53,7 +54,7 @@ import {
   type UserRecord,
 } from '../fixtures/platform';
 import type { AgentDefinition, AgentRun, CohortDefinition, EvidencePackage, InvoiceReport, StudySummary, UsageRecord } from './api';
-import type { Role } from './permissions';
+import { isPresetRole, type Permission, type Role } from './permissions';
 
 export interface AuditEntry {
   id: string;
@@ -64,6 +65,31 @@ export interface AuditEntry {
   target: string;
   detail: string;
   result: 'success' | 'blocked' | 'info';
+  /** Optional before → after delta (e.g. "on → off", "standard → regulatory"). */
+  delta?: string | null;
+}
+
+export type StudyClassification = 'standard' | 'regulatory';
+
+export interface EvidenceExportItem {
+  item: string;
+  status: 'included' | 'pending';
+  detail: string;
+}
+
+export interface EvidenceExportRecord {
+  export_id: string;
+  study_id: string;
+  tenant_id: string;
+  generated_at: string;
+  generated_by: string;
+  classification: StudyClassification;
+  ontology_version: string | null;
+  /** Demo fingerprint over study + chain head + signature count + ontology version. */
+  fingerprint: string;
+  items: EvidenceExportItem[];
+  signature_count: number;
+  chain_head_hash: string;
 }
 
 export interface SavedCohort {
@@ -103,11 +129,21 @@ export interface StoreState {
   agentServices: Record<string, Record<string, boolean>>;
   teams: TeamRecord[];
   engagements: EngagementRecord[];
+  customRoles: CustomRoleDef[];
+  accessRequests: AccessRequest[];
+  evidenceExports: EvidenceExportRecord[];
 }
 
 const now = () => new Date().toISOString();
 let seq = 1000;
 const uid = (p: string) => `${p}-${(++seq).toString(36)}-${Date.now().toString(36).slice(-4)}`;
+
+/** Deterministic demo hash (display/verify demo only — not cryptographic). */
+export function demoHash(input: string): string {
+  let h = 0;
+  for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
+  return `sha256:demo-${h.toString(16).padStart(8, '0')}${(h ^ 0x9e3779b9).toString(16).padStart(8, '0')}`;
+}
 
 function seedState(): StoreState {
   return {
@@ -161,6 +197,9 @@ function seedState(): StoreState {
     agentServices: Object.fromEntries(Object.entries(AGENT_SERVICE_SEED).map(([k, v]) => [k, { ...v }])),
     teams: teamSeed.map((t) => ({ ...t, member_ids: [...t.member_ids], access_datasets: [...t.access_datasets], access_studies: [...t.access_studies] })),
     engagements: Object.values(engagementSeed).map((e) => ({ ...e, milestones: [...e.milestones], completed: [...e.completed] })),
+    customRoles: customRoleSeed.map((r) => ({ ...r, permissions: [...r.permissions] })),
+    accessRequests: accessRequestSeed.map((r) => ({ ...r })),
+    evidenceExports: [],
   };
 }
 
@@ -206,8 +245,12 @@ export interface ProvisionTenantInput {
   isolation: ControlTenant['isolation'];
   region: string;
   actor: string;
+  /** R6 onboarding: preload the synthetic rare-disease demo dataset so
+   *  dashboard/DQ/sample cohort are populated on minute one. Default on. */
+  preload_demo?: boolean;
 }
 export function provisionTenant(input: ProvisionTenantInput): ControlTenant {
+  const preload = input.preload_demo !== false;
   const t: ControlTenant = {
     tenant_id: input.tenant_id,
     display_name: input.name,
@@ -217,17 +260,44 @@ export function provisionTenant(input: ProvisionTenantInput): ControlTenant {
     kms_key_id: `alias/ef-tenant-${input.tenant_id}-dev`,
     created_at: now(),
     users: 1,
-    datasets: 0,
+    datasets: preload ? 1 : 0,
     active_studies: 0,
-    usage: { datasets: 0, datasets_quota: 25, agent_runs: 0, agent_runs_quota: 2000, storage_gb: 0, storage_quota_gb: 500 },
+    usage: { datasets: preload ? 1 : 0, datasets_quota: 25, agent_runs: 0, agent_runs_quota: 2000, storage_gb: 0, storage_quota_gb: 500 },
   };
   update((s) => ({
     ...s,
     tenants: [...s.tenants, t],
     tenantServices: { ...s.tenantServices, [input.tenant_id]: defaultServiceStates() },
     agentServices: { ...s.agentServices, [input.tenant_id]: defaultAgentStates() },
+    datasets: preload
+      ? [{
+          dataset_id: `ds-${input.tenant_id.replace(/_/g, '-')}-demo`,
+          tenant_id: input.tenant_id,
+          name: 'Synthetic rare-disease demo dataset (preloaded)',
+          layer: 'gold' as const,
+          source: 'Synthetic demo — seeded at provisioning (no real data)',
+          rows: 128450,
+          dq_score: 88.2,
+          last_run_at: now(),
+          updated_at: now(),
+        }, ...s.datasets]
+      : s.datasets,
+    savedCohorts: preload
+      ? [{
+          id: uid('cohort'),
+          name: 'Demo starter cohort — rare disease (synthetic)',
+          tenant_id: input.tenant_id,
+          definition: sampleCohortDefinition,
+          final_count: 1284,
+          updated_at: now(),
+          author: 'system (onboarding)',
+        }, ...s.savedCohorts]
+      : s.savedCohorts,
   }));
   pushAudit({ actor: input.actor, tenant_id: input.tenant_id, action: 'tenant.provision.requested', target: input.tenant_id, detail: `${input.isolation} tenant in ${input.region} (simulated)`, result: 'success' });
+  if (preload) {
+    pushAudit({ actor: 'system', tenant_id: input.tenant_id, action: 'tenant.demo_data.seeded', target: input.tenant_id, detail: 'Synthetic rare-disease demo dataset + starter cohort preloaded so dashboard, DQ gauge, and cohort builder are populated on minute one (R6)', result: 'success' });
+  }
   pushActivity('tenant', `Tenant “${input.name}” provisioning started (${input.isolation}, ${input.region})`, input.tenant_id);
   window.setTimeout(() => {
     update((s) => ({
@@ -294,10 +364,111 @@ export function setUserRole(user_id: string, role: Role, actor: string): void {
   update((s) => ({
     ...s,
     users: s.users.map((x) => (x.user_id === user_id
-      ? { ...x, role, cognito_groups: [`tenant-${x.tenant_id}`, `role-${role.toLowerCase().replace(/\s+/g, '-')}`] }
+      ? { ...x, role, custom_role_id: null, cognito_groups: [`tenant-${x.tenant_id}`, `role-${role.toLowerCase().replace(/\s+/g, '-')}`] }
       : x)),
   }));
-  pushAudit({ actor, tenant_id: u.tenant_id, action: 'user.role.changed', target: u.email, detail: `New role: ${role}`, result: 'success' });
+  pushAudit({ actor, tenant_id: u.tenant_id, action: 'user.role.changed', target: u.email, detail: `New role: ${role}${u.role !== role ? '' : ''}`, delta: `${u.role} → ${role}`, result: 'success' });
+}
+
+// ---------------------------------------------------------------------------
+// Studies: classification (R3) and creation
+// ---------------------------------------------------------------------------
+export function classifyStudy(study_id: string, level: StudyClassification, actor: string): StudySummary {
+  const study = state.studies.find((s) => s.study_id === study_id);
+  if (!study) throw new Error(`Study ${study_id} not found`);
+  const prev = study.classification ?? 'standard';
+  if (level === 'regulatory') {
+    const approved = state.ontologyVersions.find((v) => v.status === 'approved');
+    if (!approved) {
+      pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.classified', target: study_id, detail: 'BLOCKED: Regulatory classification requires an approved ontology version; none is approved.', delta: `${prev} → regulatory (blocked)`, result: 'blocked' });
+      throw new Error('Regulatory classification requires an approved ontology version — none is approved yet. Approve one in Ontology → Governance first.');
+    }
+    update((s) => ({
+      ...s,
+      studies: s.studies.map((x) => (x.study_id === study_id
+        ? { ...x, classification: 'regulatory' as const, ontology_version: approved.version, retention_locked: true, updated_at: now() }
+        : x)),
+    }));
+    pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.classified', target: study_id, detail: `Classified Regulatory — pinned to approved ontology v${approved.version}; retention locked; Part 11 sign-off chain required for evidence export.`, delta: `${prev} → regulatory`, result: 'success' });
+  } else {
+    update((s) => ({
+      ...s,
+      studies: s.studies.map((x) => (x.study_id === study_id
+        ? { ...x, classification: 'standard' as const, ontology_version: null, retention_locked: false, updated_at: now() }
+        : x)),
+    }));
+    pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.classified', target: study_id, detail: 'Classified Standard — internal/exploratory use; no retention lock, no ontology pin.', delta: `${prev} → standard`, result: 'success' });
+  }
+  return state.studies.find((s) => s.study_id === study_id)!;
+}
+
+export function createStudy(input: { name: string; tenant_id: string; classification: StudyClassification }, actor: string): StudySummary {
+  const study: StudySummary = {
+    study_id: uid('study'),
+    tenant_id: input.tenant_id,
+    name: input.name,
+    status: 'feasibility',
+    updated_at: now(),
+    cohort_final_count: null,
+    classification: 'standard',
+    ontology_version: null,
+    retention_locked: false,
+  };
+  update((s) => ({ ...s, studies: [study, ...s.studies] }));
+  pushAudit({ actor, tenant_id: input.tenant_id, action: 'study.created', target: study.study_id, detail: input.name, result: 'success' });
+  if (input.classification === 'regulatory') {
+    classifyStudy(study.study_id, 'regulatory', actor);
+  }
+  return state.studies.find((s) => s.study_id === study.study_id)!;
+}
+
+// ---------------------------------------------------------------------------
+// Evidence exports (R3): verifiable, read-only packages
+// ---------------------------------------------------------------------------
+function exportFingerprint(r: Pick<EvidenceExportRecord, 'study_id' | 'tenant_id' | 'generated_at' | 'chain_head_hash' | 'signature_count' | 'ontology_version' | 'classification'>): string {
+  return demoHash([r.study_id, r.tenant_id, r.generated_at, r.chain_head_hash, String(r.signature_count), r.ontology_version ?? 'none', r.classification].join('|'));
+}
+
+export function exportEvidencePackage(study_id: string, actor: string): EvidenceExportRecord {
+  const study = state.studies.find((s) => s.study_id === study_id);
+  if (!study) throw new Error(`Study ${study_id} not found`);
+  const ev = state.evidence;
+  const signatureCount = ev.signatures.length;
+  const regulatory = (study.classification ?? 'standard') === 'regulatory';
+  const hasCohort = (study.cohort_final_count ?? 0) > 0 || state.savedCohorts.some((c) => c.tenant_id === study.tenant_id);
+  const items: EvidenceExportItem[] = [
+    { item: 'Study metadata', status: 'included', detail: `${study.name} · status ${study.status} · tenant ${study.tenant_id}` },
+    { item: 'Methods & analysis code refs', status: 'included', detail: 'Protocol + code bundle refs pinned at export time (demo refs).' },
+    { item: 'Ontology version', status: study.ontology_version ? 'included' : 'pending', detail: study.ontology_version ? `Pinned to approved ontology v${study.ontology_version}` : regulatory ? 'REQUIRED for Regulatory — no pinned version; classify first.' : 'Standard study — no ontology pin.' },
+    { item: 'Audit trail', status: 'included', detail: `${state.audit.filter((a) => a.tenant_id === study.tenant_id).length} entries for this tenant (published taxonomy, CSV-ready).` },
+    { item: 'Part 11 signatures & chain', status: signatureCount > 0 ? 'included' : 'pending', detail: signatureCount > 0 ? `${signatureCount} signatures; chain head ${ev.chain_head_hash.slice(0, 18)}…` : 'No signatures yet — sign the evidence package before a Regulatory export.' },
+    { item: 'Cohort definition snapshot', status: hasCohort ? 'included' : 'pending', detail: hasCohort ? `Final cohort count ${study.cohort_final_count ?? 'from saved cohort'}.` : 'No cohort snapshot recorded yet.' },
+    { item: 'QMS summary', status: 'included', detail: 'Change control, validation status, and open CAPAs summarized from the platform audit trail (demo summary).' },
+  ];
+  const base: EvidenceExportRecord = {
+    export_id: uid('export'),
+    study_id,
+    tenant_id: study.tenant_id,
+    generated_at: now(),
+    generated_by: actor,
+    classification: study.classification ?? 'standard',
+    ontology_version: study.ontology_version ?? null,
+    fingerprint: '',
+    items,
+    signature_count: signatureCount,
+    chain_head_hash: ev.chain_head_hash,
+  };
+  const record: EvidenceExportRecord = { ...base, fingerprint: exportFingerprint(base) };
+  update((s) => ({ ...s, evidenceExports: [record, ...s.evidenceExports] }));
+  pushAudit({ actor, tenant_id: study.tenant_id, action: 'evidence.package.exported', target: record.export_id, detail: `Fingerprint ${record.fingerprint}; ${items.filter((i) => i.status === 'included').length}/${items.length} checklist items included.`, result: 'success' });
+  pushActivity('evidence', `Evidence export generated for ${study_id} (${record.fingerprint.slice(0, 22)}…)`, study.tenant_id);
+  return record;
+}
+
+export function verifyEvidenceExport(export_id: string): boolean {
+  const record = state.evidenceExports.find((e) => e.export_id === export_id);
+  if (!record) return false;
+  return exportFingerprint(record) === record.fingerprint;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +564,20 @@ export interface AddConnectorInput {
   capabilities: ConnectorRecord['capabilities']; config: Record<string, string>;
   tenant_id: string; actor: string;
 }
+const CONNECTOR_CATALOG: Record<ConnectorRecord['type'], { version: string; data_handling: string }> = {
+  snowflake: { version: '1.4.0', data_handling: 'LAND mode: queried rows land in the tenant S3 bronze prefix inside the tenant boundary. Credentials never leave Secrets Manager; only OMOP-harmonized outputs are readable by agents.' },
+  databricks: { version: '1.1.2', data_handling: 'VIRTUAL mode: data stays in the tenant Databricks workspace; Evidia issues Delta Sharing / SQL reads and receives aggregates + approved extracts only.' },
+  foundry: { version: '0.9.0', data_handling: 'VIRTUAL mode: ontology sync only — class/property metadata crosses to align the Foundry ontology with the approved Evidia ontology. No patient-level data moves.' },
+  rest: { version: '2.0.1', data_handling: 'LAND mode: incremental pulls land in the tenant S3 bronze prefix. Payloads are de-identified at the silver gate before any agent can read them.' },
+};
+
 export function addConnector(input: AddConnectorInput): ConnectorRecord {
   const c: ConnectorRecord = {
     connector_id: uid('conn'), tenant_id: input.tenant_id, name: input.name, type: input.type,
     mode: input.mode, status: 'unknown', enabled: true, capabilities: input.capabilities,
     config: input.config, last_test: null, created_at: now(),
+    version: CONNECTOR_CATALOG[input.type].version,
+    data_handling: CONNECTOR_CATALOG[input.type].data_handling,
   };
   update((s) => ({ ...s, connectors: [...s.connectors, c] }));
   pushAudit({ actor: input.actor, tenant_id: input.tenant_id, action: 'connector.created', target: c.connector_id, detail: `${input.type} (${input.mode})`, result: 'success' });
@@ -492,14 +672,15 @@ export function startAgentRun(agent_name: string, tenant_id: string, study_id: s
 // ---------------------------------------------------------------------------
 // API keys / notifications
 // ---------------------------------------------------------------------------
-export function createApiKey(name: string, tenant_id: string, actor: string): { record: ApiKeyRecord; secret: string } {
+export function createApiKey(name: string, tenant_id: string, actor: string, scopes: string[] = []): { record: ApiKeyRecord; secret: string } {
   const secret = `evk_live_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}_DEMO`;
   const rec: ApiKeyRecord = {
     key_id: uid('key'), tenant_id, name, prefix: secret.slice(0, 12),
+    scopes: [...scopes],
     created_at: now(), last_used: null, status: 'active',
   };
   update((s) => ({ ...s, apiKeys: [...s.apiKeys, rec] }));
-  pushAudit({ actor, tenant_id, action: 'apikey.created', target: rec.key_id, detail: name, result: 'success' });
+  pushAudit({ actor, tenant_id, action: 'apikey.created', target: rec.key_id, detail: `${name} — scopes: ${scopes.length ? scopes.join(', ') : 'none (legacy unscoped demo key)'}`, result: 'success' });
   return { record: rec, secret };
 }
 export function revokeApiKey(key_id: string, actor: string): void {
@@ -590,6 +771,131 @@ export function submitProposal(input: { title: string; kind: ChangeProposal['kin
   return p;
 }
 
+/**
+ * Ontology version governance decision (R8, demo-state only). Approving
+ * makes the version the ONLY agent-visible ontology and supersedes the
+ * previously approved one. This mirrors the platform governance rules
+ * but intentionally does not claim a backend registry write.
+ */
+export function decideOntologyVersion(version: string, decision: 'approved' | 'rejected', tenant_id: string, actor: string): OntologyVersion {
+  const v = state.ontologyVersions.find((x) => x.version === version);
+  if (!v) throw new Error(`Ontology version ${version} not found`);
+  if (v.status !== 'in-review') throw new Error(`Only an in-review version can be decided (v${version} is ${v.status}).`);
+  if (decision === 'approved') {
+    update((s) => ({
+      ...s,
+      ontologyVersions: s.ontologyVersions.map((x) => {
+        if (x.version === version) return { ...x, status: 'approved' as const, published_at: now(), decided_by: actor, decided_at: now() };
+        if (x.status === 'approved') return { ...x, status: 'superseded' as const };
+        return x;
+      }),
+    }));
+    pushAudit({ actor, tenant_id, action: 'ontology.version.approved', target: `ontology-v${version}`, detail: `v${version} approved — agents now see v${version}; previously approved version superseded.`, delta: 'in-review → approved', result: 'success' });
+    pushActivity('system', `Ontology v${version} approved — agents now see v${version}`, tenant_id);
+  } else {
+    update((s) => ({
+      ...s,
+      ontologyVersions: s.ontologyVersions.map((x) => (x.version === version ? { ...x, status: 'rejected' as const, decided_by: actor, decided_at: now() } : x)),
+    }));
+    pushAudit({ actor, tenant_id, action: 'ontology.version.rejected', target: `ontology-v${version}`, detail: `v${version} rejected at sign-off — stays invisible to agents.`, delta: 'in-review → rejected', result: 'success' });
+    pushActivity('system', `Ontology v${version} rejected at governance sign-off`, tenant_id);
+  }
+  return state.ontologyVersions.find((x) => x.version === version)!;
+}
+
+// ---------------------------------------------------------------------------
+// Composable roles (R5) & access requests
+// ---------------------------------------------------------------------------
+export function createCustomRole(input: { name: string; description?: string; tenant_id: string; cloned_from: Role; permissions: Permission[] }, actor: string): CustomRoleDef {
+  const role: CustomRoleDef = {
+    id: uid('crole'),
+    name: input.name,
+    description: input.description ?? '',
+    tenant_id: input.tenant_id,
+    cloned_from: input.cloned_from,
+    permissions: [...input.permissions],
+    created_at: now(),
+    created_by: actor,
+  };
+  update((s) => ({ ...s, customRoles: [...s.customRoles, role] }));
+  pushAudit({ actor, tenant_id: input.tenant_id, action: 'role.custom.created', target: role.id, detail: `Cloned from ${input.cloned_from} with ${input.permissions.length} permissions.`, result: 'success' });
+  return role;
+}
+
+export function updateCustomRole(id: string, patch: { name?: string; description?: string; permissions?: Permission[] }, actor: string): void {
+  const role = state.customRoles.find((r) => r.id === id);
+  if (!role) return;
+  const before = role.permissions.length;
+  update((s) => ({
+    ...s,
+    customRoles: s.customRoles.map((r) => (r.id === id
+      ? { ...r, name: patch.name ?? r.name, description: patch.description ?? r.description, permissions: patch.permissions ? [...patch.permissions] : r.permissions }
+      : r)),
+  }));
+  pushAudit({ actor, tenant_id: role.tenant_id, action: 'role.custom.updated', target: id, detail: role.name, delta: patch.permissions ? `${before} → ${patch.permissions.length} permissions` : null, result: 'success' });
+}
+
+export function deleteCustomRole(id: string, actor: string): void {
+  const role = state.customRoles.find((r) => r.id === id);
+  if (!role) return;
+  update((s) => ({
+    ...s,
+    customRoles: s.customRoles.filter((r) => r.id !== id),
+    users: s.users.map((u) => (u.custom_role_id === id ? { ...u, custom_role_id: null } : u)),
+  }));
+  pushAudit({ actor, tenant_id: role.tenant_id, action: 'role.custom.deleted', target: id, detail: `${role.name} — assignees fall back to their preset role.`, result: 'success' });
+}
+
+export function assignCustomRole(user_id: string, custom_role_id: string | null, actor: string): void {
+  const u = state.users.find((x) => x.user_id === user_id);
+  if (!u) return;
+  const role = custom_role_id ? state.customRoles.find((r) => r.id === custom_role_id) : null;
+  update((s) => ({
+    ...s,
+    users: s.users.map((x) => (x.user_id === user_id ? { ...x, custom_role_id } : x)),
+  }));
+  pushAudit({ actor, tenant_id: u.tenant_id, action: 'user.custom_role.assigned', target: u.email, detail: role ? `Custom role: ${role.name}` : 'Custom role cleared — preset role applies.', delta: role ? `→ ${role.name}` : '→ preset role', result: 'success' });
+}
+
+export function requestAccess(input: { tenant_id: string; user_id: string | null; requester_name: string; requester_email: string; requested_role: string; is_custom: boolean; reason: string }, actor: string): AccessRequest {
+  const req: AccessRequest = {
+    id: uid('areq'),
+    tenant_id: input.tenant_id,
+    user_id: input.user_id,
+    requester_name: input.requester_name,
+    requester_email: input.requester_email,
+    requested_role: input.requested_role,
+    is_custom: input.is_custom,
+    reason: input.reason,
+    status: 'pending',
+    created_at: now(),
+    decided_by: null,
+    decided_at: null,
+  };
+  update((s) => ({ ...s, accessRequests: [req, ...s.accessRequests] }));
+  pushAudit({ actor, tenant_id: input.tenant_id, action: 'access.requested', target: req.id, detail: `${input.requester_name} requested ${input.requested_role}: ${input.reason}`, result: 'info' });
+  return req;
+}
+
+export function decideAccessRequest(id: string, decision: 'approved' | 'rejected', actor: string): void {
+  const req = state.accessRequests.find((r) => r.id === id);
+  if (!req || req.status !== 'pending') return;
+  update((s) => ({
+    ...s,
+    accessRequests: s.accessRequests.map((r) => (r.id === id ? { ...r, status: decision, decided_by: actor, decided_at: now() } : r)),
+  }));
+  pushAudit({ actor, tenant_id: req.tenant_id, action: `access.request.${decision}`, target: id, detail: `${req.requester_name} → ${req.requested_role}`, result: 'success' });
+  if (decision === 'approved' && req.user_id) {
+    if (req.is_custom) {
+      const role = state.customRoles.find((r) => r.tenant_id === req.tenant_id && r.name === req.requested_role);
+      if (role) assignCustomRole(req.user_id, role.id, actor);
+    } else if (isPresetRole(req.requested_role)) {
+      setUserRole(req.user_id, req.requested_role, actor);
+    }
+  }
+  pushActivity('user', `Access request ${decision}: ${req.requester_name} → ${req.requested_role}`, req.tenant_id);
+}
+
 /** Append a Part 11 signature to the evidence chain (hash-linked, demo). */
 export function signEvidence(tenant_id: string, signerName: string, signerId: string, meaning: string): void {
   const ev = state.evidence;
@@ -619,14 +925,14 @@ export function setServiceEnabled(tenant_id: string, key: ServiceKey, enabled: b
     const current = s.tenantServices[tenant_id] ?? defaultServiceStates();
     return { ...s, tenantServices: { ...s.tenantServices, [tenant_id]: { ...current, [key]: enabled } } };
   });
-  pushAudit({ actor, tenant_id, action: enabled ? 'service.enabled' : 'service.disabled', target: key, detail: serviceDef(key).name, result: 'success' });
+  pushAudit({ actor, tenant_id, action: enabled ? 'service.enabled' : 'service.disabled', target: key, detail: serviceDef(key).name, delta: enabled ? 'disabled → enabled' : 'enabled → disabled', result: 'success' });
 }
 export function setAgentEnabled(tenant_id: string, agent_name: string, enabled: boolean, actor: string): void {
   update((s) => {
     const current = s.agentServices[tenant_id] ?? defaultAgentStates();
     return { ...s, agentServices: { ...s.agentServices, [tenant_id]: { ...current, [agent_name]: enabled } } };
   });
-  pushAudit({ actor, tenant_id, action: enabled ? 'service.agent.enabled' : 'service.agent.disabled', target: agent_name, detail: '', result: 'success' });
+  pushAudit({ actor, tenant_id, action: enabled ? 'service.agent.enabled' : 'service.agent.disabled', target: agent_name, detail: '', delta: enabled ? 'disabled → enabled' : 'enabled → disabled', result: 'success' });
 }
 
 // ---------------------------------------------------------------------------
