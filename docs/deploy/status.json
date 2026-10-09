@@ -18,10 +18,10 @@
   "updated_at": "2026-10-09T05:50:33Z"
  },
  {
-  "detail": "Redeploying (attempt 9). Config recorder/channel deadlock proven via probe stack (L1 handler needs channel; API needs recorder first). Pair now provisioned via SDK custom resources in explicit order. Earlier fixes hold (buckets, FSBP slug, Hub defaults, KMS grants, trail prefix, auto-delete). Orphan keys across rounds in 7-day pending deletion.",
-  "status": "running",
+  "detail": "CREATE_COMPLETE (attempt 10). Multi-region CloudTrail w/ log-file validation, GuardDuty, Security Hub FSBP+PCI DSS, Config recorder+delivery channel (recorder NOT started - post-deploy step), rules, GitHub OIDC deploy role. 9 rollbacks peeled: bucket naming, FSBP slug, Hub default standards, KMS service grants, cloudtrail// prefix, CFN recorder/channel stabilization deadlock (probe-proven; now boto3 Lambda custom resource), auto-delete.",
+  "status": "done",
   "step": "ef-security-dev",
-  "updated_at": "2026-10-09T07:16:14Z"
+  "updated_at": "2026-10-09T07:24:18Z"
  },
  {
   "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
