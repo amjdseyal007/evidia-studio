@@ -18,10 +18,10 @@
   "updated_at": "2026-10-09T05:50:33Z"
  },
  {
-  "detail": "Redeploying (attempt 7). Fixed en route: bucket naming, FSBP slug, Hub defaults, KMS service grants, cloudtrail//AWSLogs prefix, Config recorder DependsOn delivery channel, auto-delete on write-receiving dev buckets. 6 rollbacks peeled one layer each; orphan KMS keys scheduled for deletion each round (7-day window).",
+  "detail": "Redeploying (attempt 9). Config recorder/channel deadlock proven via probe stack (L1 handler needs channel; API needs recorder first). Pair now provisioned via SDK custom resources in explicit order. Earlier fixes hold (buckets, FSBP slug, Hub defaults, KMS grants, trail prefix, auto-delete). Orphan keys across rounds in 7-day pending deletion.",
   "status": "running",
   "step": "ef-security-dev",
-  "updated_at": "2026-10-09T06:42:18Z"
+  "updated_at": "2026-10-09T07:16:14Z"
  },
  {
   "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
