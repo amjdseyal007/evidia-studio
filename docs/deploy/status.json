@@ -24,10 +24,10 @@
   "updated_at": "2026-10-09T07:24:18Z"
  },
  {
-  "detail": "Data lake: per-tenant KMS (alias/ef-tenant-demo-dev), ef-bronze/silver/gold/audit-dev buckets",
-  "status": "pending",
+  "detail": "Redeploying. First attempt failed: LF skeleton (settings/tags) deployed ungated but LF APIs require a registered LF-admin deploy principal; LF skeleton now sits behind the same lakeformation_grants_enabled gate as the grants (OFF).",
+  "status": "running",
   "step": "ef-data-dev",
-  "updated_at": "2026-10-09T05:13:16Z"
+  "updated_at": "2026-10-09T07:30:10Z"
  },
  {
   "detail": "Aurora Serverless metadata/ontology registry",
