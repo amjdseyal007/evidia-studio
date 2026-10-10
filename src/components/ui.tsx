@@ -3,7 +3,7 @@
  * modal, confirm dialog, toasts, pills, meters, empty states, and
  * lightweight inline-SVG charts. All styling via index.css tokens.
  */
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 // ------------------------------------------------------------------ pills
 export type Tone = 'ok' | 'warn' | 'err' | 'info' | 'neutral';
@@ -15,7 +15,7 @@ export function toneForStatus(status: string): Tone {
   const s = status.toLowerCase();
   if (['active', 'succeeded', 'connected', 'operational', 'healthy', 'deployed', 'intact'].includes(s)) return 'ok';
   if (['running', 'provisioning', 'invited', 'warn'].includes(s)) return 'info';
-  if (['degraded', 'unknown', 'not-deployed', 'synth-only', 'warning'].includes(s)) return 'warn';
+  if (['degraded', 'unknown', 'not-deployed', 'synth-only', 'warning', 'suspended'].includes(s)) return 'warn';
   if (['failed', 'error', 'blocked', 'offboarded', 'deactivated', 'revoked'].includes(s)) return 'err';
   return 'neutral';
 }
@@ -62,9 +62,19 @@ export function useToasts() {
 
 // ------------------------------------------------------------------ modal
 export function Modal({ title, onClose, children, testId }: { title: string; onClose: () => void; children: ReactNode; testId?: string }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    boxRef.current?.focus();
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} data-testid={testId} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} data-testid={testId}
+        ref={boxRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close dialog">✕</button>

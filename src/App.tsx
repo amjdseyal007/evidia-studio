@@ -20,6 +20,8 @@ import ControlPlane from './views/ControlPlane';
 import Delivery from './views/Delivery';
 import Users from './views/Users';
 import Settings from './views/Settings';
+import Activity from './views/Activity';
+import Help from './views/Help';
 
 interface NavItem { path: string; key: string; label: string; icon: string; perm: Permission; service?: ServiceKey }
 const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
@@ -31,6 +33,8 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { path: '/studies', key: 'studies', label: 'Products & Studies', icon: '▤', perm: 'studies:view' },
       { path: '/agents', key: 'agents', label: 'Agents', icon: '✦', perm: 'agents:view', service: 'agents' },
       { path: '/evidence', key: 'evidence', label: 'Evidence & Compliance', icon: '✓', perm: 'evidence:view', service: 'evidence' },
+      { path: '/activity', key: 'activity', label: 'Activity & Notifications', icon: '◔', perm: 'dashboard:view' },
+      { path: '/help', key: 'help', label: 'Help & Getting Started', icon: '?', perm: 'dashboard:view' },
     ],
   },
   {
@@ -296,6 +300,8 @@ function Shell() {
             <Route path="/control" element={<Guard perm="controlplane:view" role={role}><ControlPlane tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
             <Route path="/users" element={<Guard perm="users:view" role={role}><Users tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
             <Route path="/settings" element={<Guard perm="settings:manage" role={role}><Settings tenantId={tenantId} actor={actor} role={effRole} /></Guard>} />
+            <Route path="/activity" element={<Guard perm="dashboard:view" role={role}><Activity tenantId={tenantId} actor={actor} /></Guard>} />
+            <Route path="/help" element={<Guard perm="dashboard:view" role={role}><Help tenantId={tenantId} role={effRole} /></Guard>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           {bgOpen && viewAsTenantId ? (

@@ -6,6 +6,7 @@ import {
   type OntologyBundle,
   type SemanticHit,
 } from '../lib/api';
+import { ontologyClassSeed, ontologyExtensionClassSeed } from '../fixtures/ontology';
 import { useStore } from '../lib/store';
 import { useSession } from '../lib/session';
 import { can } from '../lib/permissions';
@@ -92,6 +93,9 @@ export default function Ontology() {
 
   const [signoffConfirm, setSignoffConfirm] = useState<'approved' | 'rejected' | null>(null);
   const [signoffBusy, setSignoffBusy] = useState(false);
+  const [classQuery, setClassQuery] = useState('');
+  const [diffFrom, setDiffFrom] = useState('0.1.0');
+  const [diffTo, setDiffTo] = useState('0.2.0');
 
   useEffect(() => {
     let cancelled = false;
@@ -674,12 +678,25 @@ export default function Ontology() {
                 title="Class hierarchy"
                 sub={`${bundle.classes.length} classes grounded in ontology/evidia-seed.ttl`}
               />
+              <div className="field">
+                <label htmlFor="class-filter">Filter classes</label>
+                <input id="class-filter" data-testid="class-filter" className="input input-sm" type="search"
+                  placeholder="Filter by label or id…" value={classQuery}
+                  onChange={(e) => setClassQuery(e.target.value)} />
+              </div>
               <div data-testid="ontology-class-tree">
                 {flattenedTree.length === 0 ? (
                   <EmptyState title="No classes" body="The seed ontology returned no classes." />
                 ) : (
                   <ul className="list">
-                    {flattenedTree.map(({ id, depth }) => {
+                    {flattenedTree
+                      .filter(({ id }) => {
+                        const q = classQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        const cls = classById.get(id);
+                        return cls ? cls.label.toLowerCase().includes(q) || cls.id.toLowerCase().includes(q) : false;
+                      })
+                      .map(({ id, depth }) => {
                       const cls = classById.get(id);
                       if (!cls) return null;
                       const active = selectedClass?.id === id;
@@ -1120,6 +1137,63 @@ export default function Ontology() {
               testId="ontology-versions"
               emptyText="No ontology versions."
             />
+          </div>
+
+          <div className="card" style={{ marginTop: 14 }} data-testid="ontology-version-diff">
+            <SectionTitle title="Compare versions" sub="What changes if the newer version is approved — shape, status, and the classes that are new." />
+            {(() => {
+              const from = versionRows.find((v) => v.version === diffFrom);
+              const to = versionRows.find((v) => v.version === diffTo);
+              const baseIds = new Set(ontologyClassSeed.map((c) => c.id));
+              const added = ontologyExtensionClassSeed.filter((c) => !baseIds.has(c.id));
+              return (
+                <div>
+                  <div className="row" style={{ alignItems: 'flex-end' }}>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor="diff-from">From</label>
+                      <select id="diff-from" data-testid="diff-from" className="select" value={diffFrom} onChange={(e) => setDiffFrom(e.target.value)}>
+                        {versionRows.map((v) => <option key={v.version} value={v.version}>v{v.version} ({v.status})</option>)}
+                      </select>
+                    </div>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label htmlFor="diff-to">To</label>
+                      <select id="diff-to" data-testid="diff-to" className="select" value={diffTo} onChange={(e) => setDiffTo(e.target.value)}>
+                        {versionRows.map((v) => <option key={v.version} value={v.version}>v{v.version} ({v.status})</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {from && to ? (
+                    <div style={{ marginTop: 12 }}>
+                      <table className="table">
+                        <thead><tr><th></th><th>v{from.version}</th><th>v{to.version}</th><th>Delta</th></tr></thead>
+                        <tbody>
+                          <tr><th>Classes</th><td>{fmtNum(from.classes)}</td><td>{fmtNum(to.classes)}</td><td>{to.classes - from.classes >= 0 ? '+' : ''}{to.classes - from.classes}</td></tr>
+                          <tr><th>Properties</th><td>{fmtNum(from.properties)}</td><td>{fmtNum(to.properties)}</td><td>{to.properties - from.properties >= 0 ? '+' : ''}{to.properties - from.properties}</td></tr>
+                          <tr><th>Status</th><td>{from.status}</td><td>{to.status}</td><td>{from.status === to.status ? '—' : `${from.status} → ${to.status}`}</td></tr>
+                          <tr><th>Agent-visible</th><td>{from.status === 'approved' ? 'yes' : 'no'}</td><td>{to.status === 'approved' ? 'yes' : 'no'}</td><td>{to.status === 'approved' && from.status !== 'approved' ? 'becomes visible on approval' : '—'}</td></tr>
+                        </tbody>
+                      </table>
+                      <p style={{ marginTop: 10 }}><strong>v{to.version} notes:</strong> {to.notes}</p>
+                      {added.length > 0 ? (
+                        <div>
+                          <p className="muted">Classes new in the expansion ({added.length}) — click to open in the Explorer:</p>
+                          <div className="row" style={{ flexWrap: 'wrap' }}>
+                            {added.map((c) => (
+                              <button key={c.id} type="button" className="btn btn-sm" onClick={() => jumpToClass(c.id)}>
+                                {c.label} <span className="mono muted">{c.id}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <p className="muted">Diff is demo-state: class lists come from the seed + expansion fixtures; the live registry diff lands with deployment.</p>
+                    </div>
+                  ) : (
+                    <p className="muted">Pick two versions to compare.</p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="card" style={{ marginTop: 14 }}>

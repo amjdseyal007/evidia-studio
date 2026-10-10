@@ -74,7 +74,13 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
   const [provErrors, setProvErrors] = useState<{ name?: string; tenant_id?: string }>({});
   const [provSubmitting, setProvSubmitting] = useState(false);
   const [provPreloadDemo, setProvPreloadDemo] = useState(true);
+  const [provStep, setProvStep] = useState<1 | 2>(1);
   const [auditCategory, setAuditCategory] = useState<string>('All');
+  const [auditTenant, setAuditTenant] = useState<string>('All');
+  const [auditResult, setAuditResult] = useState<string>('All');
+  const [budgetMonthly, setBudgetMonthly] = useState('');
+  const [budgetThreshold, setBudgetThreshold] = useState('80');
+  const [budgetError, setBudgetError] = useState<string | null>(null);
 
   const [offboardTenantState, setOffboardTenantState] = useState<ControlTenant | null>(null);
   const [offboardVerdict, setOffboardVerdict] = useState<OffboardCheck | null>(null);
@@ -184,6 +190,7 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
     setProvRegion('us-east-1');
     setProvErrors({});
     setProvPreloadDemo(true);
+    setProvStep(1);
     setProvisionOpen(true);
   }
 
@@ -313,9 +320,36 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
   })();
 
   const filteredAuditEntries = store.audit.filter(
-    (a) => auditCategory === 'All' || auditEventInfo(a.action).category === auditCategory,
+    (a) => (auditCategory === 'All' || auditEventInfo(a.action).category === auditCategory)
+      && (auditTenant === 'All' || a.tenant_id === auditTenant)
+      && (auditResult === 'All' || a.result === auditResult),
   );
   const filteredAudit = filteredAuditEntries.map((a) => ({ ...a }));
+
+  const budget = store.budgets[effectiveBillingTenant] ?? null;
+  const budgetSpent = invoice?.totals.priced_total_usd ?? 0;
+  const budgetPct = budget && budget.monthly_usd > 0 ? Math.round((budgetSpent / budget.monthly_usd) * 100) : 0;
+  const budgetAlert = budget != null && budgetPct >= budget.alert_threshold_pct;
+
+  async function handleSaveBudget() {
+    const monthly = Number(budgetMonthly);
+    const threshold = Number(budgetThreshold);
+    if (!Number.isFinite(monthly) || monthly <= 0) {
+      setBudgetError('Enter a positive monthly budget (USD).');
+      return;
+    }
+    if (!Number.isFinite(threshold) || threshold < 1 || threshold > 100) {
+      setBudgetError('Alert threshold must be between 1 and 100 (%).');
+      return;
+    }
+    setBudgetError(null);
+    try {
+      await api.setBudget(effectiveBillingTenant, monthly, threshold, actor);
+      push({ title: 'Budget saved', body: `$${monthly}/month for ${effectiveBillingTenant}, alert at ${threshold}% (demo).`, tone: 'ok' });
+    } catch {
+      push({ title: 'Budget failed', body: 'The demo store rejected the budget.', tone: 'err' });
+    }
+  }
 
   return (
     <section>
@@ -401,6 +435,25 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
           >
             Export CSV
           </button>
+        </div>
+        <div className="row" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="cp-audit-tenant">Audit tenant</label>
+            <select id="cp-audit-tenant" data-testid="cp-audit-tenant" className="select input-sm" value={auditTenant} onChange={(e) => setAuditTenant(e.target.value)}>
+              <option value="All">All tenants</option>
+              {store.tenants.map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.display_name}</option>)}
+            </select>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="cp-audit-result">Result</label>
+            <select id="cp-audit-result" data-testid="cp-audit-result" className="select input-sm" value={auditResult} onChange={(e) => setAuditResult(e.target.value)}>
+              <option value="All">All results</option>
+              <option value="success">success</option>
+              <option value="blocked">blocked</option>
+              <option value="info">info</option>
+            </select>
+          </div>
+          <span className="muted">{filteredAuditEntries.length} entries</span>
         </div>
         <DataTable
           rows={filteredAudit}
@@ -564,7 +617,55 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
 
               <div className="row" style={{ marginTop: 12 }}>
                 <button type="button" className="btn btn-primary" onClick={downloadInvoice}>Download invoice JSON</button>
+                <button type="button" className="btn" data-testid="email-usage-report"
+                  onClick={async () => {
+                    await api.sendUsageReport(effectiveBillingTenant, actor);
+                    push({ title: 'Usage report generated', body: 'Monthly usage report delivered as an in-console notification (demo — no email sent).', tone: 'ok' });
+                  }}>
+                  Email monthly report (demo)
+                </button>
                 <span className="muted">Downloads the full invoice report for {invoice.tenant_id}.</span>
+              </div>
+
+              <div style={{ marginTop: 18 }} data-testid="billing-budget">
+                <h3>Budget & alerts</h3>
+                <p className="muted">
+                  Set a monthly budget for this tenant. The meter compares it with the priced total above;
+                  crossing the alert threshold raises an alert here (and, in production, notifies operators —
+                  demo: this panel only).
+                </p>
+                {budget ? (
+                  <div style={{ marginBottom: 10 }}>
+                    <div className="row" style={{ justifyContent: 'space-between' }}>
+                      <span>Priced spend ${budgetSpent.toFixed(3)} of ${budget.monthly_usd}/month</span>
+                      <span className="row">
+                        <span className="muted">{budgetPct}% · alert at {budget.alert_threshold_pct}%</span>
+                        {budgetAlert ? <Pill tone="err" testId="budget-alert">Budget alert</Pill> : <Pill tone="ok">Within budget</Pill>}
+                      </span>
+                    </div>
+                    <Meter value={budgetSpent} max={budget.monthly_usd} label="Budget consumption" />
+                    <p className="muted">Set by {budget.updated_by} · {fmtDate(budget.updated_at)}</p>
+                  </div>
+                ) : (
+                  <p className="muted" data-testid="budget-unset">No budget set for this tenant yet.</p>
+                )}
+                <form onSubmit={(e) => { e.preventDefault(); void handleSaveBudget(); }}>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label htmlFor="budget-monthly">Monthly budget (USD)</label>
+                      <input id="budget-monthly" data-testid="budget-monthly" className="input" type="number" min="0" step="any"
+                        value={budgetMonthly} onChange={(e) => setBudgetMonthly(e.target.value)}
+                        placeholder={budget ? String(budget.monthly_usd) : 'e.g. 500'} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="budget-threshold">Alert threshold (%)</label>
+                      <input id="budget-threshold" data-testid="budget-threshold" className="input" type="number" min="1" max="100"
+                        value={budgetThreshold} onChange={(e) => setBudgetThreshold(e.target.value)} />
+                    </div>
+                  </div>
+                  {budgetError ? <span className="field-error">{budgetError}</span> : null}
+                  <button type="submit" className="btn btn-primary" data-testid="budget-save">Save budget</button>
+                </form>
               </div>
             </>
           ) : !billingLoading ? (
@@ -574,11 +675,34 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
       )}
 
       {provisionOpen ? (
-        <Modal title="Provision tenant" onClose={() => setProvisionOpen(false)} testId="provision-modal">
+        <Modal title={provStep === 1 ? 'Provision tenant' : 'Review tenant provisioning'} onClose={() => setProvisionOpen(false)} testId="provision-modal">
+          {provStep === 2 ? (
+            <div data-testid="provision-review">
+              <p className="muted">Confirm what will be created. Provisioning is simulated locally; in production this drives the CDK tenant plan.</p>
+              <table className="table">
+                <tbody>
+                  <tr><th style={{ width: '38%' }}>Display name</th><td>{provName.trim()}</td></tr>
+                  <tr><th>Tenant ID</th><td className="mono">{provTenantId.trim()}</td></tr>
+                  <tr><th>Isolation</th><td>{ISOLATION_OPTIONS.find((o) => o.value === provIsolation)?.label} — {ISOLATION_OPTIONS.find((o) => o.value === provIsolation)?.blurb}</td></tr>
+                  <tr><th>Region</th><td>{provRegion}</td></tr>
+                  <tr><th>KMS key</th><td className="mono">alias/ef-tenant-{provTenantId.trim()}-dev</td></tr>
+                  <tr><th>Demo data preload</th><td>{provPreloadDemo ? 'Yes — synthetic rare-disease dataset + starter cohort (R6)' : 'No — empty workspace'}</td></tr>
+                </tbody>
+              </table>
+              <p className="muted">Also created (simulated): per-tenant S3 prefixes, Batch queue, Cognito tenant group, default service entitlements. The tenant flips from provisioning → active in a few seconds and every step is audited.</p>
+              <div className="modal-actions">
+                <button type="button" className="btn" onClick={() => setProvStep(1)}>← Back</button>
+                <button type="button" className="btn btn-primary" data-testid="provision-confirm" disabled={provSubmitting}
+                  onClick={() => void submitProvision()}>
+                  {provSubmitting ? 'Provisioning…' : 'Provision tenant'}
+                </button>
+              </div>
+            </div>
+          ) : (
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void submitProvision();
+              if (validateProvision()) setProvStep(2);
             }}
           >
             <div className="field">
@@ -629,9 +753,10 @@ export default function ControlPlane({ tenantId: tenantIdProp, actor, role }: { 
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setProvisionOpen(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={provSubmitting}>{provSubmitting ? 'Provisioning…' : 'Provision tenant'}</button>
+              <button type="submit" className="btn btn-primary" data-testid="provision-next">Review →</button>
             </div>
           </form>
+          )}
         </Modal>
       ) : null}
 

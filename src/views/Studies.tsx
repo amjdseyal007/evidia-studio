@@ -41,6 +41,8 @@ interface ControlArmStatus {
   progress: number;
 }
 
+const LIFECYCLE = ['feasibility', 'in_progress', 'qa_review', 'dossier_draft', 'delivered'] as const;
+
 const STATUS_LABEL: Record<string, string> = {
   dossier_draft: 'Dossier draft', feasibility: 'Feasibility', qa_review: 'QA review',
   in_progress: 'In progress', delivered: 'Delivered',
@@ -99,6 +101,10 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
   const [classifyLevel, setClassifyLevel] = useState<StudyClassification>('standard');
   const [classifyError, setClassifyError] = useState<string | null>(null);
   const [classifyBusy, setClassifyBusy] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskOwner, setTaskOwner] = useState('');
+  const [taskDue, setTaskDue] = useState('');
+  const [taskError, setTaskError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -157,8 +163,7 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
     }
   }
 
-  async function handleClassifyStudy(studyIdToClassify: string) {
-    setClassifyBusy(true);
+  async function handleClassifyStudy(studyIdToClassify: string) {    setClassifyBusy(true);
     setClassifyError(null);
     try {
       const updated = await api.classifyStudy(studyIdToClassify, classifyLevel, actor);
@@ -175,6 +180,33 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
       setClassifyError(err instanceof Error ? err.message : 'Failed to classify study.');
     } finally {
       setClassifyBusy(false);
+    }
+  }
+
+  async function handleAdvanceStatus(studyIdToAdvance: string, next: string) {
+    try {
+      await api.setStudyStatus(studyIdToAdvance, next, actor);
+      push({ title: 'Study advanced', body: `Status moved to ${statusLabel(next)} (demo).`, tone: 'ok' });
+    } catch (err) {
+      push({ title: 'Status change failed', body: err instanceof Error ? err.message : 'Failed to change status.', tone: 'err' });
+    }
+  }
+
+  async function handleAddTask(studyIdForTask: string) {
+    const title = taskTitle.trim();
+    if (!title) {
+      setTaskError('Task title is required.');
+      return;
+    }
+    try {
+      await api.addStudyTask({ study_id: studyIdForTask, title, owner: taskOwner.trim() || actor, due: taskDue || null }, actor);
+      setTaskTitle('');
+      setTaskOwner('');
+      setTaskDue('');
+      setTaskError(null);
+      push({ title: 'Task added', body: title, tone: 'ok' });
+    } catch (err) {
+      setTaskError(err instanceof Error ? err.message : 'Failed to add task.');
     }
   }
 
@@ -369,6 +401,94 @@ export default function Studies({ tenantId, actor, role }: StudiesProps) {
                 <Pill tone="neutral">Evidence requires evidence:view</Pill>
               )}
             </div>
+          </div>
+
+          <div className="card" data-testid="study-lifecycle">
+            <h3>Lifecycle</h3>
+            <ol className="lifecycle-steps">
+              {LIFECYCLE.map((stage) => {
+                const currentIdx = LIFECYCLE.indexOf(study.status as (typeof LIFECYCLE)[number]);
+                const idx = LIFECYCLE.indexOf(stage);
+                const state = idx < currentIdx ? 'done' : idx === currentIdx ? 'current' : 'todo';
+                return (
+                  <li key={stage} className={`lc-${state}`} data-testid={`lc-${stage}`}>
+                    <span aria-hidden="true">{state === 'done' ? '✓' : state === 'current' ? '●' : '○'}</span> {statusLabel(stage)}
+                  </li>
+                );
+              })}
+            </ol>
+            {(() => {
+              const idx = LIFECYCLE.indexOf(study.status as (typeof LIFECYCLE)[number]);
+              const next = idx >= 0 && idx < LIFECYCLE.length - 1 ? LIFECYCLE[idx + 1] : null;
+              if (!next) return <p className="muted">Final lifecycle stage reached.</p>;
+              return canCreateStudy ? (
+                <button type="button" className="btn btn-primary btn-sm" data-testid="advance-status-btn"
+                  onClick={() => void handleAdvanceStatus(study.study_id, next)}>
+                  Advance to {statusLabel(next)}
+                </button>
+              ) : (
+                <Pill tone="neutral">Status changes require an editor role</Pill>
+              );
+            })()}
+            <p className="muted" style={{ marginTop: 8 }}>Advancing is recorded in the audit log (study.status.changed, demo state only).</p>
+          </div>
+
+          <div className="card" data-testid="study-tasks">
+            <h3>Tasks & milestones</h3>
+            {(() => {
+              const tasks = store.studyTasks.filter((t) => t.study_id === study.study_id);
+              const openCount = tasks.filter((t) => !t.done).length;
+              return (
+                <>
+                  <p className="muted">{tasks.length} tasks · {openCount} open. Checking a task writes to the audit log.</p>
+                  {tasks.length === 0 ? (
+                    <EmptyState title="No tasks yet" body="Add the first task below to track milestones for this study." />
+                  ) : (
+                    <ul className="checklist">
+                      {tasks.map((t) => (
+                        <li key={t.id} data-testid={`task-${t.id}`}>
+                          <input type="checkbox" checked={t.done} disabled={!canCreateStudy}
+                            aria-label={`Complete task: ${t.title}`}
+                            onChange={() => void api.toggleStudyTask(t.id, actor)} />
+                          <span style={{ flex: 1, textDecoration: t.done ? 'line-through' : undefined }}>
+                            <strong>{t.title}</strong>
+                            <br />
+                            <span className="muted">{t.owner}{t.due ? ` · due ${t.due}` : ''}</span>
+                          </span>
+                          {canCreateStudy ? (
+                            <button type="button" className="btn btn-ghost btn-sm" aria-label={`Delete task ${t.title}`}
+                              onClick={() => void api.deleteStudyTask(t.id, actor)}>✕</button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {canCreateStudy ? (
+                    <form onSubmit={(e) => { e.preventDefault(); void handleAddTask(study.study_id); }} style={{ marginTop: 10 }}>
+                      <div className="field">
+                        <label htmlFor="task-title">New task</label>
+                        <input id="task-title" data-testid="task-title-input" className="input" value={taskTitle}
+                          onChange={(e) => setTaskTitle(e.target.value)} placeholder="e.g. Review propensity balance" />
+                        {taskError ? <span className="field-error">{taskError}</span> : null}
+                      </div>
+                      <div className="grid-2">
+                        <div className="field">
+                          <label htmlFor="task-owner">Owner</label>
+                          <input id="task-owner" className="input" value={taskOwner} onChange={(e) => setTaskOwner(e.target.value)} placeholder={actor} />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="task-due">Due (optional)</label>
+                          <input id="task-due" className="input" type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} />
+                        </div>
+                      </div>
+                      <button type="submit" className="btn btn-sm btn-primary" data-testid="add-task-btn">Add task</button>
+                    </form>
+                  ) : (
+                    <p className="muted">Task editing requires an editor role.</p>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           <div className="card" data-testid="study-classification-card">

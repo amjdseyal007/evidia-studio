@@ -289,6 +289,18 @@ export default function CohortBuilder({ tenantId, actor, role }: CohortBuilderPr
     }
   }
 
+  async function duplicateSaved(row: SavedRow) {
+    const saved = savedForTenant.find((c) => c.id === row.id);
+    if (!saved) return;
+    setBusy('save');
+    try {
+      const copy = await api.saveCohort(`${saved.name} (copy)`, saved.definition, saved.final_count, tenantId, actor);
+      toast({ title: 'Cohort duplicated', body: `“${copy.name}” added to the library.`, tone: 'ok' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const savedColumns: Array<Column<SavedRow>> = [
     { key: 'name', label: 'Name', render: (r) => r.name, sortValue: (r) => r.name },
     {
@@ -311,6 +323,11 @@ export default function CohortBuilder({ tenantId, actor, role }: CohortBuilderPr
         <span className="row">
           <button type="button" className="btn btn-sm" onClick={() => loadSaved(r)}>
             Load
+          </button>
+          <button type="button" className="btn btn-sm" disabled={!canEdit || busy !== null}
+            title={canEdit ? 'Save a copy of this cohort under a new name' : 'Requires cohorts:edit permission'}
+            onClick={() => void duplicateSaved(r)}>
+            Duplicate
           </button>
           <button
             type="button"

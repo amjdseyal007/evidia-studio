@@ -64,6 +64,7 @@ export default function DataPipeline({
   const [datasetFilter, setDatasetFilter] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [dq, setDq] = useState<QualityResult | null>(null);
+  const [scheduleState, setScheduleState] = useState<Record<string, { cadence: string; paused: boolean }>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -375,20 +376,44 @@ export default function DataPipeline({
 
       <div className="card" style={{ marginTop: 14 }} data-testid="pipeline-schedules">
         <h3>Schedules</h3>
-        <p className="muted">Recurring refresh cadences per dataset (demo schedules — no live scheduler is attached).</p>
+        <p className="muted">Recurring refresh cadences per dataset (demo schedules — no live scheduler is attached). Changing a cadence or pausing is a local demo action; in production this writes the scheduler config and is audited.</p>
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Dataset</th><th>Cadence</th><th>Next run</th><th>Status</th></tr></thead>
+            <thead><tr><th>Dataset</th><th>Cadence</th><th>Next run</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {datasets.map((ds, i) => (
-                <tr key={ds.dataset_id}>
-                  <td>{ds.name}</td>
-                  <td>{['Daily 06:00 UTC', 'Weekly Mon 05:00 UTC', 'On demand'][i % 3]}</td>
-                  <td>{i % 3 === 2 ? '—' : fmtDate(new Date(Date.now() + (i + 1) * 36e5).toISOString())}</td>
-                  <td><Pill tone={i % 3 === 2 ? 'neutral' : 'ok'}>{i % 3 === 2 ? 'manual' : 'active'}</Pill></td>
-                </tr>
-              ))}
-              {datasets.length === 0 && <tr><td colSpan={4}><div className="empty-state">No datasets to schedule.</div></td></tr>}
+              {datasets.map((ds, i) => {
+                const sched = scheduleState[ds.dataset_id] ?? {
+                  cadence: ['Daily 06:00 UTC', 'Weekly Mon 05:00 UTC', 'On demand'][i % 3],
+                  paused: i % 3 === 2,
+                };
+                return (
+                  <tr key={ds.dataset_id}>
+                    <td>{ds.name}</td>
+                    <td>
+                      <select className="select input-sm" aria-label={`Cadence for ${ds.name}`} data-testid={`sched-cadence-${ds.dataset_id}`}
+                        value={sched.cadence} disabled={!canRun}
+                        onChange={(e) => {
+                          setScheduleState((prev) => ({ ...prev, [ds.dataset_id]: { cadence: e.target.value, paused: e.target.value === 'On demand' ? true : sched.paused } }));
+                          push({ title: 'Schedule updated (demo)', body: `${ds.name} → ${e.target.value}. No live scheduler is attached.`, tone: 'info' });
+                        }}>
+                        {['Daily 06:00 UTC', 'Weekly Mon 05:00 UTC', 'Hourly', 'On demand'].map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </td>
+                    <td>{sched.paused || sched.cadence === 'On demand' ? '—' : fmtDate(new Date(Date.now() + (i + 1) * 36e5).toISOString())}</td>
+                    <td><Pill tone={sched.paused ? 'neutral' : 'ok'}>{sched.paused ? 'paused' : 'active'}</Pill></td>
+                    <td>
+                      <button type="button" className="btn btn-sm" disabled={!canRun} data-testid={`sched-toggle-${ds.dataset_id}`}
+                        onClick={() => {
+                          setScheduleState((prev) => ({ ...prev, [ds.dataset_id]: { ...sched, paused: !sched.paused } }));
+                          push({ title: sched.paused ? 'Schedule resumed (demo)' : 'Schedule paused (demo)', body: ds.name, tone: 'ok' });
+                        }}>
+                        {sched.paused ? 'Resume' : 'Pause'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {datasets.length === 0 && <tr><td colSpan={5}><div className="empty-state">No datasets to schedule.</div></td></tr>}
             </tbody>
           </table>
         </div>

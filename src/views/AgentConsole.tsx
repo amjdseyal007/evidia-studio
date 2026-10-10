@@ -81,8 +81,34 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
     },
   ];
 
-  async function handleStartRun() {
-    if (!runAgent) return;
+  function runLogLines(run: AgentRun): string[] {
+    const lines = [
+      `[${run.started_at}] run started — agent=${run.agent_name} model=${run.model_id} prompt=${run.prompt_name}`,
+      `[${run.started_at}] goal: ${goalOverrides[run.run_id] ?? run.goal}`,
+      `[${run.started_at}] ontology pinned to approved version (agents see approved only)`,
+      ...run.ontology_tool_calls.map((c, i) => `[step ${i + 1}] ${c.tool} (${c.status}, ${c.latency_ms} ms) — ${c.args_summary}`),
+      run.status === 'running'
+        ? '[now] awaiting further tool calls… (simulated)'
+        : `[${run.finished_at ?? run.started_at}] run ${run.status} — tokens ${run.input_tokens} in / ${run.output_tokens} out`,
+    ];
+    return lines;
+  }
+
+  function downloadTrace(run: AgentRun) {
+    const payload = { ...run, goal: goalOverrides[run.run_id] ?? run.goal, log: runLogLines(run), exported_by: actor, demo: true };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${run.run_id}-trace.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    push({ title: 'Run trace downloaded', body: `${run.run_id}-trace.json (demo trace).`, tone: 'ok' });
+  }
+
+  async function handleStartRun() {    if (!runAgent) return;
     setStarting(true);
     try {
       const studyId = runStudyId === '' ? null : runStudyId;
@@ -191,6 +217,15 @@ export default function AgentConsole({ tenantId, actor, role }: { tenantId: stri
           </p>
           <p className="muted">Started {fmtDate(selectedRun.started_at)} · Finished {fmtDate(selectedRun.finished_at)} · Study {selectedRun.study_id ? <span className="mono">{selectedRun.study_id}</span> : 'No study (exploratory)'}</p>
           <p>Tokens: <strong>{fmtNum(selectedRun.input_tokens)}</strong> in / <strong>{fmtNum(selectedRun.output_tokens)}</strong> out · total <strong>{fmtNum(selectedRun.input_tokens + selectedRun.output_tokens)}</strong></p>
+
+          <h3 style={{ marginTop: 12 }}>Run log</h3>
+          <div className="log-box" data-testid="run-log">{runLogLines(selectedRun).join('\n')}</div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button type="button" className="btn btn-sm" data-testid="download-trace" onClick={() => downloadTrace(selectedRun)}>
+              Download run trace (JSON)
+            </button>
+            <span className="muted">Trace = run metadata + goal + tool calls + this log (demo data).</span>
+          </div>
 
           <h3 style={{ marginTop: 12 }}>Ontology tool-call trace</h3>
           {selectedRun.ontology_tool_calls.length === 0 ? (

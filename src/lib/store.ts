@@ -102,6 +102,35 @@ export interface SavedCohort {
   author: string;
 }
 
+export interface StudyTask {
+  id: string;
+  study_id: string;
+  tenant_id: string;
+  title: string;
+  owner: string;
+  due: string | null;
+  done: boolean;
+  created_at: string;
+}
+
+export interface BudgetSetting {
+  tenant_id: string;
+  monthly_usd: number;
+  alert_threshold_pct: number;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface WebhookRecord {
+  webhook_id: string;
+  tenant_id: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  created_at: string;
+  last_delivery: { at: string; ok: boolean; status_code: number; message: string } | null;
+}
+
 export interface StoreState {
   tenants: ControlTenant[];
   users: UserRecord[];
@@ -110,6 +139,9 @@ export interface StoreState {
   connectors: ConnectorRecord[];
   products: ProductRecord[];
   studies: StudySummary[];
+  studyTasks: StudyTask[];
+  budgets: Record<string, BudgetSetting>;
+  webhooks: WebhookRecord[];
   evidence: EvidencePackage;
   agentRuns: AgentRun[];
   savedCohorts: SavedCohort[];
@@ -151,9 +183,18 @@ function seedState(): StoreState {
     users: userSeed.map((u) => ({ ...u })),
     datasets: datasetSeed.map((d) => ({ ...d })),
     pipelineRuns: pipelineRunSeed.map((r) => ({ ...r, steps: r.steps.map((s) => ({ ...s, logs: [...s.logs] })) })),
-    connectors: connectorSeed.map((c) => ({ ...c, capabilities: [...c.capabilities], config: { ...c.config } })),
+    connectors: connectorSeed.map((c) => ({ ...c, capabilities: [...c.capabilities], config: { ...c.config }, field_mappings: c.field_mappings.map((m) => ({ ...m })) })),
     products: productSeed.map((p) => ({ ...p, includes: [...p.includes] })),
     studies: studyFixtures.map((s) => ({ ...s })),
+    studyTasks: [
+      { id: 'task-seed-1', study_id: 'study-acme-001', tenant_id: 'acme_rare', title: 'Confirm cohort attrition with biostatistician', owner: 'Priya Nair', due: '2026-10-14', done: true, created_at: '2026-10-06T09:00:00Z' },
+      { id: 'task-seed-2', study_id: 'study-acme-001', tenant_id: 'acme_rare', title: 'Balance diagnostics review (SMD < 0.1)', owner: 'Priya Nair', due: '2026-10-21', done: false, created_at: '2026-10-07T11:30:00Z' },
+      { id: 'task-seed-3', study_id: 'study-acme-001', tenant_id: 'acme_rare', title: 'Draft dossier methods section', owner: 'Tom Alvarez', due: '2026-10-28', done: false, created_at: '2026-10-08T08:15:00Z' },
+    ],
+    budgets: {},
+    webhooks: [
+      { webhook_id: 'wh-seed-1', tenant_id: 'acme_rare', url: 'https://siem.acme.example/evidia/events', events: ['evidence.package.signed', 'service.disabled'], enabled: true, created_at: '2026-09-28T10:00:00Z', last_delivery: { at: '2026-10-08T12:20:44Z', ok: true, status_code: 200, message: 'Delivered (simulated)' } },
+    ],
     evidence: { ...evidenceFixture },
     agentRuns: agentRunFixtures.map((r) => ({ ...r, ontology_tool_calls: r.ontology_tool_calls.map((c) => ({ ...c })) })),
     savedCohorts: [
@@ -350,13 +391,29 @@ export function inviteUser(input: InviteUserInput): UserRecord {
   update((s) => ({ ...s, users: [...s.users, u] }));
   pushAudit({ actor: input.actor, tenant_id: input.tenant_id, action: 'user.invited', target: u.email, detail: `Role: ${input.role}`, result: 'success' });
   pushActivity('user', `Invited ${u.name} (${input.role}) to ${input.tenant_id}`, input.tenant_id);
+  // Demo lifecycle: the invitee "accepts" shortly after (simulated sign-in),
+  // moving invited → active so the full invite lifecycle is visible.
+  window.setTimeout(() => {
+    const current = state.users.find((x) => x.user_id === u.user_id);
+    if (!current || current.status !== 'invited') return;
+    update((s) => ({ ...s, users: s.users.map((x) => (x.user_id === u.user_id ? { ...x, status: 'active' as const, last_login: now() } : x)) }));
+    pushAudit({ actor: u.email, tenant_id: u.tenant_id, action: 'user.invite.accepted', target: u.email, detail: 'Invite accepted — first sign-in (simulated)', result: 'info' });
+    pushActivity('user', `${u.name} accepted the invite and is now active`, u.tenant_id);
+  }, 6000);
   return u;
+}
+export function resendInvite(user_id: string, actor: string): void {
+  const u = state.users.find((x) => x.user_id === user_id);
+  if (!u || u.status !== 'invited') return;
+  pushAudit({ actor, tenant_id: u.tenant_id, action: 'user.invite.resent', target: u.email, detail: 'Invitation re-sent (demo — no email leaves this browser)', result: 'success' });
+  pushActivity('user', `Invitation re-sent to ${u.name}`, u.tenant_id);
 }
 export function setUserStatus(user_id: string, status: UserRecord['status'], actor: string): void {
   const u = state.users.find((x) => x.user_id === user_id);
   if (!u) return;
   update((s) => ({ ...s, users: s.users.map((x) => (x.user_id === user_id ? { ...x, status } : x)) }));
-  pushAudit({ actor, tenant_id: u.tenant_id, action: status === 'deactivated' ? 'user.deactivated' : 'user.reactivated', target: u.email, detail: '', result: 'success' });
+  const action = status === 'deactivated' ? 'user.deactivated' : status === 'suspended' ? 'user.suspended' : 'user.reactivated';
+  pushAudit({ actor, tenant_id: u.tenant_id, action, target: u.email, detail: '', delta: `${u.status} → ${status}`, result: 'success' });
 }
 export function setUserRole(user_id: string, role: Role, actor: string): void {
   const u = state.users.find((x) => x.user_id === user_id);
@@ -400,6 +457,94 @@ export function classifyStudy(study_id: string, level: StudyClassification, acto
     pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.classified', target: study_id, detail: 'Classified Standard — internal/exploratory use; no retention lock, no ontology pin.', delta: `${prev} → standard`, result: 'success' });
   }
   return state.studies.find((s) => s.study_id === study_id)!;
+}
+
+export function setStudyStatus(study_id: string, status: string, actor: string): StudySummary {
+  const study = state.studies.find((s) => s.study_id === study_id);
+  if (!study) throw new Error(`Study ${study_id} not found`);
+  const prev = study.status;
+  update((s) => ({ ...s, studies: s.studies.map((x) => (x.study_id === study_id ? { ...x, status, updated_at: now() } : x)) }));
+  pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.status.changed', target: study_id, detail: study.name, delta: `${prev} → ${status}`, result: 'success' });
+  pushActivity('system', `Study “${study.name}” moved to ${status}`, study.tenant_id);
+  return state.studies.find((s) => s.study_id === study_id)!;
+}
+
+// ---------------------------------------------------------------------------
+// Study tasks (workspace milestones/to-dos, demo store)
+// ---------------------------------------------------------------------------
+export function addStudyTask(input: { study_id: string; title: string; owner: string; due: string | null }, actor: string): StudyTask {
+  const study = state.studies.find((s) => s.study_id === input.study_id);
+  if (!study) throw new Error(`Study ${input.study_id} not found`);
+  const task: StudyTask = {
+    id: uid('task'), study_id: input.study_id, tenant_id: study.tenant_id,
+    title: input.title, owner: input.owner, due: input.due, done: false, created_at: now(),
+  };
+  update((s) => ({ ...s, studyTasks: [task, ...s.studyTasks] }));
+  pushAudit({ actor, tenant_id: study.tenant_id, action: 'study.task.created', target: task.id, detail: `${input.title} (study ${input.study_id})`, result: 'success' });
+  return task;
+}
+export function toggleStudyTask(id: string, actor: string): void {
+  const task = state.studyTasks.find((t) => t.id === id);
+  if (!task) return;
+  update((s) => ({ ...s, studyTasks: s.studyTasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) }));
+  pushAudit({ actor, tenant_id: task.tenant_id, action: task.done ? 'study.task.reopened' : 'study.task.completed', target: id, detail: task.title, result: 'success' });
+}
+export function deleteStudyTask(id: string, actor: string): void {
+  const task = state.studyTasks.find((t) => t.id === id);
+  if (!task) return;
+  update((s) => ({ ...s, studyTasks: s.studyTasks.filter((t) => t.id !== id) }));
+  pushAudit({ actor, tenant_id: task.tenant_id, action: 'study.task.deleted', target: id, detail: task.title, result: 'info' });
+}
+
+// ---------------------------------------------------------------------------
+// Billing budgets (demo — alerts evaluate against fixture priced totals)
+// ---------------------------------------------------------------------------
+export function setBudget(tenant_id: string, monthly_usd: number, alert_threshold_pct: number, actor: string): BudgetSetting {
+  const rec: BudgetSetting = { tenant_id, monthly_usd, alert_threshold_pct, updated_at: now(), updated_by: actor };
+  update((s) => ({ ...s, budgets: { ...s.budgets, [tenant_id]: rec } }));
+  pushAudit({ actor, tenant_id, action: 'billing.budget.updated', target: tenant_id, detail: `Monthly budget $${monthly_usd} · alert at ${alert_threshold_pct}%`, result: 'success' });
+  return rec;
+}
+export function sendUsageReport(tenant_id: string, actor: string): void {
+  pushAudit({ actor, tenant_id, action: 'billing.report.emailed', target: tenant_id, detail: 'Monthly usage report "emailed" (demo — delivered as an in-console notification only)', result: 'success' });
+  update((s) => ({
+    ...s,
+    notifications: [{ id: uid('notif'), at: now(), title: 'Monthly usage report ready', body: `The monthly usage report for ${tenant_id} was generated by ${actor} (demo — no email left this browser).`, severity: 'info' as const, read: false }, ...s.notifications],
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks (demo store — deliveries are simulated, never sent)
+// ---------------------------------------------------------------------------
+export function createWebhook(input: { tenant_id: string; url: string; events: string[] }, actor: string): WebhookRecord {
+  const rec: WebhookRecord = {
+    webhook_id: uid('wh'), tenant_id: input.tenant_id, url: input.url,
+    events: [...input.events], enabled: true, created_at: now(), last_delivery: null,
+  };
+  update((s) => ({ ...s, webhooks: [...s.webhooks, rec] }));
+  pushAudit({ actor, tenant_id: input.tenant_id, action: 'webhook.created', target: rec.webhook_id, detail: `${input.url} — events: ${input.events.join(', ') || 'none'}`, result: 'success' });
+  return rec;
+}
+export function deleteWebhook(webhook_id: string, actor: string): void {
+  const rec = state.webhooks.find((w) => w.webhook_id === webhook_id);
+  if (!rec) return;
+  update((s) => ({ ...s, webhooks: s.webhooks.filter((w) => w.webhook_id !== webhook_id) }));
+  pushAudit({ actor, tenant_id: rec.tenant_id, action: 'webhook.deleted', target: webhook_id, detail: rec.url, result: 'success' });
+}
+export function setWebhookEnabled(webhook_id: string, enabled: boolean, actor: string): void {
+  const rec = state.webhooks.find((w) => w.webhook_id === webhook_id);
+  if (!rec) return;
+  update((s) => ({ ...s, webhooks: s.webhooks.map((w) => (w.webhook_id === webhook_id ? { ...w, enabled } : w)) }));
+  pushAudit({ actor, tenant_id: rec.tenant_id, action: enabled ? 'webhook.enabled' : 'webhook.disabled', target: webhook_id, detail: rec.url, result: 'info' });
+}
+export function testWebhook(webhook_id: string, actor: string): { ok: boolean; status_code: number; latency_ms: number; message: string } {
+  const rec = state.webhooks.find((w) => w.webhook_id === webhook_id);
+  if (!rec) return { ok: false, status_code: 0, latency_ms: 0, message: 'webhook not found' };
+  const latency_ms = 90 + Math.floor(Math.random() * 300);
+  const delivery = { at: now(), ok: true, status_code: 200, message: `Test event delivered (simulated) in ${latency_ms} ms — no network call was made.` };
+  update((s) => ({ ...s, webhooks: s.webhooks.map((w) => (w.webhook_id === webhook_id ? { ...w, last_delivery: delivery } : w)) }));
+  pushAudit({ actor, tenant_id: rec.tenant_id, action: 'webhook.tested', target: webhook_id, detail: `HTTP ${delivery.status_code} in ${latency_ms} ms (simulated)`, result: 'success' });
+  return { ok: true, status_code: 200, latency_ms, message: delivery.message };
 }
 
 export function createStudy(input: { name: string; tenant_id: string; classification: StudyClassification }, actor: string): StudySummary {
@@ -562,6 +707,7 @@ export function addDataset(input: { name: string; tenant_id: string; layer: Data
 export interface AddConnectorInput {
   name: string; type: ConnectorRecord['type']; mode: ConnectorRecord['mode'];
   capabilities: ConnectorRecord['capabilities']; config: Record<string, string>;
+  field_mappings?: Array<{ source_field: string; omop_domain: string; target_concept: string }>;
   tenant_id: string; actor: string;
 }
 const CONNECTOR_CATALOG: Record<ConnectorRecord['type'], { version: string; data_handling: string }> = {
@@ -575,7 +721,8 @@ export function addConnector(input: AddConnectorInput): ConnectorRecord {
   const c: ConnectorRecord = {
     connector_id: uid('conn'), tenant_id: input.tenant_id, name: input.name, type: input.type,
     mode: input.mode, status: 'unknown', enabled: true, capabilities: input.capabilities,
-    config: input.config, last_test: null, created_at: now(),
+    config: input.config, field_mappings: (input.field_mappings ?? []).map((m) => ({ ...m })),
+    last_test: null, created_at: now(),
     version: CONNECTOR_CATALOG[input.type].version,
     data_handling: CONNECTOR_CATALOG[input.type].data_handling,
   };

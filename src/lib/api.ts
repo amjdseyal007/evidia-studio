@@ -44,9 +44,9 @@ import type {
   EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
   ServiceHealth, UserRecord,
 } from '../fixtures/platform';
-import type { ConnectorCapability } from '../fixtures/platform';
+import type { ConnectorCapability, FieldMapping } from '../fixtures/platform';
 import * as store from './store';
-import type { AuditEntry, EvidenceExportRecord, SavedCohort, StudyClassification } from './store';
+import type { AuditEntry, BudgetSetting, EvidenceExportRecord, SavedCohort, StudyClassification, StudyTask, WebhookRecord } from './store';
 import type { CustomRoleDef, AccessRequest } from '../fixtures/access';
 import type { Permission, Role } from './permissions';
 import { currentTenant, getToken } from './auth';
@@ -55,8 +55,9 @@ export type {
   ActivityItem, ApiKeyRecord, ConnectorRecord, ControlTenant, DatasetRecord,
   EnvironmentRecord, NotificationItem, PipelineRun, ProductRecord,
   ServiceHealth, UserRecord, AuditEntry, SavedCohort, ConnectorCapability,
-  ServiceKey, TenantServiceStates, TeamRecord, EngagementRecord,
+  FieldMapping, ServiceKey, TenantServiceStates, TeamRecord, EngagementRecord,
   EngagementPhase, EngagementHealth, EvidenceExportRecord, StudyClassification,
+  StudyTask, BudgetSetting, WebhookRecord,
   CustomRoleDef, AccessRequest, Permission,
 };
 
@@ -587,6 +588,19 @@ export interface StudioApi {
   listAccessRequests(tenantId?: string): Promise<AccessRequest[]>;
   requestAccess(input: { tenant_id: string; user_id: string | null; requester_name: string; requester_email: string; requested_role: string; is_custom: boolean; reason: string }, actor: string): Promise<AccessRequest>;
   decideAccessRequest(id: string, decision: 'approved' | 'rejected', actor: string): Promise<void>;
+
+  // --- console completion pass: study lifecycle/tasks, budgets, webhooks ---
+  setStudyStatus(studyId: string, status: string, actor: string): Promise<StudySummary>;
+  addStudyTask(input: { study_id: string; title: string; owner: string; due: string | null }, actor: string): Promise<store.StudyTask>;
+  toggleStudyTask(id: string, actor: string): Promise<void>;
+  deleteStudyTask(id: string, actor: string): Promise<void>;
+  setBudget(tenantId: string, monthlyUsd: number, alertThresholdPct: number, actor: string): Promise<store.BudgetSetting>;
+  sendUsageReport(tenantId: string, actor: string): Promise<void>;
+  createWebhook(input: { tenant_id: string; url: string; events: string[] }, actor: string): Promise<store.WebhookRecord>;
+  deleteWebhook(webhookId: string, actor: string): Promise<void>;
+  setWebhookEnabled(webhookId: string, enabled: boolean, actor: string): Promise<void>;
+  testWebhook(webhookId: string, actor: string): Promise<{ ok: boolean; status_code: number; latency_ms: number; message: string }>;
+  resendInvite(userId: string, actor: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -904,6 +918,41 @@ export function createMockApi(): StudioApi {
     async decideAccessRequest(id, decision, actor) {
       store.decideAccessRequest(id, decision, actor); return tick(undefined);
     },
+
+    // --- console completion pass (demo store backed) ---
+    async setStudyStatus(studyId, status, actor) {
+      return tick(store.setStudyStatus(studyId, status, actor));
+    },
+    async addStudyTask(input, actor) {
+      return tick(store.addStudyTask(input, actor));
+    },
+    async toggleStudyTask(id, actor) {
+      store.toggleStudyTask(id, actor); return tick(undefined);
+    },
+    async deleteStudyTask(id, actor) {
+      store.deleteStudyTask(id, actor); return tick(undefined);
+    },
+    async setBudget(tenantId, monthlyUsd, alertThresholdPct, actor) {
+      return tick(store.setBudget(tenantId, monthlyUsd, alertThresholdPct, actor));
+    },
+    async sendUsageReport(tenantId, actor) {
+      store.sendUsageReport(tenantId, actor); return tick(undefined);
+    },
+    async createWebhook(input, actor) {
+      return tick(store.createWebhook(input, actor));
+    },
+    async deleteWebhook(webhookId, actor) {
+      store.deleteWebhook(webhookId, actor); return tick(undefined);
+    },
+    async setWebhookEnabled(webhookId, enabled, actor) {
+      store.setWebhookEnabled(webhookId, enabled, actor); return tick(undefined);
+    },
+    async testWebhook(webhookId, actor) {
+      return tick(store.testWebhook(webhookId, actor));
+    },
+    async resendInvite(userId, actor) {
+      store.resendInvite(userId, actor); return tick(undefined);
+    },
   };
 }
 
@@ -1188,6 +1237,9 @@ const ENTERPRISE_LIVE_METHODS = [
   'listCustomRoles', 'createCustomRole', 'updateCustomRole',
   'deleteCustomRole', 'assignCustomRole', 'listAccessRequests',
   'requestAccess', 'decideAccessRequest',
+  'setStudyStatus', 'addStudyTask', 'toggleStudyTask', 'deleteStudyTask',
+  'setBudget', 'sendUsageReport', 'createWebhook', 'deleteWebhook',
+  'setWebhookEnabled', 'testWebhook', 'resendInvite',
 ] as const;
 
 type EnterpriseNotMounted = Pick<StudioApi, (typeof ENTERPRISE_LIVE_METHODS)[number]>;

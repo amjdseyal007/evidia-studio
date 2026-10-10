@@ -57,16 +57,36 @@ const CONFIG_FIELDS: Record<ConnectorRecord['type'], Array<{ key: string; label:
 };
 
 interface WizardState {
-  step: 1 | 2 | 3;
+  step: 1 | 2 | 3 | 4;
   type: ConnectorRecord['type'];
   name: string;
   mode: ConnectorRecord['mode'];
   capabilities: Array<ConnectorRecord['capabilities'][number]>;
   config: Record<string, string>;
+  mappings: Array<{ source_field: string; omop_domain: string; target_concept: string }>;
 }
+
+const OMOP_DOMAINS = ['Condition', 'Drug', 'Measurement', 'Procedure', 'Visit', 'Person', 'Observation'];
+
+const MAPPING_PRESETS: Record<ConnectorRecord['type'], WizardState['mappings']> = {
+  snowflake: [
+    { source_field: 'DIAGNOSIS_CODE', omop_domain: 'Condition', target_concept: 'SNOMED CT standard concept' },
+    { source_field: 'PATIENT_DOB', omop_domain: 'Person', target_concept: 'year_of_birth (de-identified)' },
+  ],
+  databricks: [
+    { source_field: 'lab_code', omop_domain: 'Measurement', target_concept: 'LOINC standard concept' },
+  ],
+  foundry: [
+    { source_field: 'object_type', omop_domain: 'Observation', target_concept: 'ontology class (sync only)' },
+  ],
+  rest: [
+    { source_field: 'result_value', omop_domain: 'Measurement', target_concept: 'value_as_number' },
+  ],
+};
 
 const blankWizard = (): WizardState => ({
   step: 1, type: 'snowflake', name: '', mode: 'land', capabilities: ['pushdown'], config: {},
+  mappings: MAPPING_PRESETS.snowflake.map((m) => ({ ...m })),
 });
 
 export default function Connectors({
@@ -170,6 +190,19 @@ export default function Connectors({
       if (Object.keys(errors).length === 0) {
         setWizard((w) => (w ? { ...w, step: 3 } : w));
       }
+      return;
+    }
+    if (wizard.step === 3) {
+      const errors: Record<string, string> = {};
+      if (wizard.mappings.length === 0) {
+        errors.mappings = 'Map at least one source field — unmapped sources cannot be harmonized.';
+      } else if (wizard.mappings.some((m) => !m.source_field.trim() || !m.target_concept.trim())) {
+        errors.mappings = 'Every mapping row needs a source field and a target concept.';
+      }
+      setWizardErrors(errors);
+      if (Object.keys(errors).length === 0) {
+        setWizard((w) => (w ? { ...w, step: 4 } : w));
+      }
     }
   }
 
@@ -183,6 +216,7 @@ export default function Connectors({
         mode: wizard.mode,
         capabilities: wizard.capabilities,
         config: wizard.config,
+        field_mappings: wizard.mappings,
         tenant_id: tenantId,
         actor,
       });
@@ -217,6 +251,8 @@ export default function Connectors({
           <strong className={r.enabled ? undefined : 'muted'}>{r.name}</strong>
           {!r.enabled ? <> <Pill tone="neutral">Disabled</Pill></> : null}
           <br /><span className="muted mono">{r.connector_id}</span>
+          <br />
+          <span className="muted" style={{ fontSize: 12 }} data-testid={`connector-mappings-${r.connector_id}`}>{r.field_mappings.length} field mapping{r.field_mappings.length === 1 ? '' : 's'}</span>
           <br />
           <span className="muted" style={{ fontSize: 12 }} data-testid={`connector-data-handling-${r.connector_id}`}>{r.data_handling}</span>
         </>
@@ -359,7 +395,7 @@ export default function Connectors({
       )}
 
       {wizard ? (
-        <Modal title={`Add connector — step ${wizard.step} of 3`} onClose={() => setWizard(null)} testId="add-connector-wizard">
+        <Modal title={`Add connector — step ${wizard.step} of 4`} onClose={() => setWizard(null)} testId="add-connector-wizard">
           {wizard.step === 1 ? (
             <div>
               <p className="muted">Pick the connector type and give it a display name.</p>
@@ -369,7 +405,7 @@ export default function Connectors({
                     key={t} type="button"
                     className={wizard.type === t ? 'card btn-primary' : 'card'}
                     style={{ textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => setWizard((w) => (w ? { ...w, type: t, config: {} } : w))}
+                    onClick={() => setWizard((w) => (w ? { ...w, type: t, config: {}, mappings: MAPPING_PRESETS[t].map((m) => ({ ...m })) } : w))}
                   >
                     <strong>{TYPE_LABELS[t]}</strong>
                     <br />
@@ -472,6 +508,53 @@ export default function Connectors({
           ) : null}
 
           {wizard.step === 3 ? (
+            <div data-testid="connector-field-mapping">
+              <p className="muted">
+                Map source fields to OMOP domains. These mappings drive harmonization — fields left unmapped
+                are landed raw (bronze) but never reach silver/gold until mapped. Start from the preset rows and adjust.
+              </p>
+              {wizard.mappings.map((m, i) => (
+                <div key={i} className="grid-2" style={{ alignItems: 'end' }}>
+                  <div className="field">
+                    <label htmlFor={`map-src-${i}`}>Source field</label>
+                    <input id={`map-src-${i}`} className="input mono" value={m.source_field}
+                      onChange={(e) => setWizard((w) => (w ? { ...w, mappings: w.mappings.map((x, xi) => (xi === i ? { ...x, source_field: e.target.value } : x)) } : w))}
+                      placeholder="e.g. DIAGNOSIS_CODE" />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`map-domain-${i}`}>OMOP domain</label>
+                    <select id={`map-domain-${i}`} className="select" value={m.omop_domain}
+                      onChange={(e) => setWizard((w) => (w ? { ...w, mappings: w.mappings.map((x, xi) => (xi === i ? { ...x, omop_domain: e.target.value } : x)) } : w))}>
+                      {OMOP_DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`map-target-${i}`}>Target concept</label>
+                    <input id={`map-target-${i}`} className="input" value={m.target_concept}
+                      onChange={(e) => setWizard((w) => (w ? { ...w, mappings: w.mappings.map((x, xi) => (xi === i ? { ...x, target_concept: e.target.value } : x)) } : w))}
+                      placeholder="e.g. SNOMED CT standard concept" />
+                  </div>
+                  <div className="field">
+                    <button type="button" className="btn btn-ghost btn-sm" aria-label={`Remove mapping row ${i + 1}`}
+                      onClick={() => setWizard((w) => (w ? { ...w, mappings: w.mappings.filter((_, xi) => xi !== i) } : w))}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {wizardErrors.mappings ? <div className="field-error" role="alert">{wizardErrors.mappings}</div> : null}
+              <button type="button" className="btn btn-sm" data-testid="mapping-add-row"
+                onClick={() => setWizard((w) => (w ? { ...w, mappings: [...w.mappings, { source_field: '', omop_domain: 'Condition', target_concept: '' }] } : w))}>
+                + Add field mapping
+              </button>
+              <div className="modal-actions">
+                <button type="button" className="btn" onClick={() => setWizard((w) => (w ? { ...w, step: 2 } : w))}>← Back</button>
+                <button type="button" className="btn btn-primary" onClick={wizardNext}>Next →</button>
+              </div>
+            </div>
+          ) : null}
+
+          {wizard.step === 4 ? (
             <div>
               <p className="muted">Review, then save and run a simulated connection test.</p>
               <table className="table">
@@ -486,10 +569,20 @@ export default function Connectors({
                   {Object.entries(wizard.config).map(([k, v]) => (
                     <tr key={k}><th>{k}</th><td className="mono">{v}</td></tr>
                   ))}
+                  <tr>
+                    <th>Field mappings</th>
+                    <td>
+                      {wizard.mappings.map((m) => (
+                        <div key={m.source_field} className="mono" style={{ fontSize: 12 }}>
+                          {m.source_field} → {m.omop_domain} · {m.target_concept}
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
                 </tbody>
               </table>
               <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setWizard((w) => (w ? { ...w, step: 2 } : w))}>← Back</button>
+                <button type="button" className="btn" onClick={() => setWizard((w) => (w ? { ...w, step: 3 } : w))}>← Back</button>
                 <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void wizardSave()}>
                   {saving ? 'Saving & testing…' : 'Save & test connection'}
                 </button>

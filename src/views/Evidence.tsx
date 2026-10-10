@@ -58,6 +58,8 @@ export default function Evidence({ tenantId, role, actor = 'unknown@example.com'
   const [exportVerified, setExportVerified] = useState<boolean | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [auditCategory, setAuditCategory] = useState('All');
+  const [fpLookup, setFpLookup] = useState('');
+  const [fpResult, setFpResult] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -127,6 +129,25 @@ export default function Evidence({ tenantId, role, actor = 'unknown@example.com'
       body: ok ? 'Fingerprint matches package contents.' : 'Fingerprint does not match package contents.',
       tone: ok ? 'ok' : 'err',
     });
+  }
+
+  async function handleFingerprintLookup() {
+    const fp = fpLookup.trim();
+    if (!fp) {
+      setFpResult('Paste a fingerprint first.');
+      return;
+    }
+    const found = store.evidenceExports.find((e) => e.fingerprint === fp || e.fingerprint.startsWith(fp));
+    if (!found) {
+      setFpResult('No export in this demo matches that fingerprint.');
+      return;
+    }
+    const ok = await api.verifyEvidenceExport(found.export_id);
+    setFpResult(
+      ok
+        ? `Match: export for study ${found.study_id} (generated ${found.generated_at} by ${found.generated_by}) — fingerprint verified against package contents.`
+        : `Match found for study ${found.study_id}, but the fingerprint does NOT verify — package contents changed after export.`,
+    );
   }
 
   const auditEntries = useMemo(() => store.audit.filter((a) => a.tenant_id === tenantId), [store.audit, tenantId]);
@@ -400,6 +421,17 @@ export default function Evidence({ tenantId, role, actor = 'unknown@example.com'
                         </ul>
                       </div>
                     ) : null}
+
+                    <div style={{ marginTop: 14 }} data-testid="fingerprint-lookup">
+                      <h3 style={{ fontSize: 13 }}>Verify a fingerprint</h3>
+                      <p className="muted">A reviewer holding only the fingerprint can check it here — the package contents are recomputed and compared (demo).</p>
+                      <div className="row">
+                        <input className="input mono" style={{ flex: 1 }} data-testid="fp-input" value={fpLookup}
+                          onChange={(e) => setFpLookup(e.target.value)} placeholder="sha256:demo-…" aria-label="Evidence export fingerprint" />
+                        <button type="button" className="btn btn-sm" data-testid="fp-verify" onClick={() => void handleFingerprintLookup()}>Verify</button>
+                      </div>
+                      {fpResult ? <p style={{ marginTop: 8 }}><Pill tone={fpResult.startsWith('Match:') ? 'ok' : fpResult.startsWith('Match found') ? 'err' : 'neutral'}>{fpResult}</Pill></p> : null}
+                    </div>
                   </div>
                 </div>
               ) : (

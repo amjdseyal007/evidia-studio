@@ -137,8 +137,8 @@ export default function Dashboard({ tenantId, actor }: { tenantId: string; actor
 
         <div className="card">
           <div className="kpi-label">Evidence packages</div>
-          <div className="kpi-value">1</div>
-          <div className="kpi-delta muted">Chain INTACT · {store.evidence.signatures.length} signatures (fixture)</div>
+          <div className="kpi-value">{tenantId === store.evidence.tenant_id ? 1 : 0}</div>
+          <div className="kpi-delta muted">Chain INTACT · {store.evidence.signatures.length} signatures · {store.evidenceExports.filter((e) => e.tenant_id === tenantId).length} verifiable exports (fixture)</div>
         </div>
 
         <div className="card">

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { api, type ApiKeyRecord, type ControlTenant } from '../lib/api';
-import { useStore } from '../lib/store';
+import { recordAudit, useStore } from '../lib/store';
 import { PERMISSIONS, PERMISSION_LABELS, can, type Permission, type Role } from '../lib/permissions';
 import { ConfirmDialog, DataTable, Modal, Pill, SectionTitle, fmtDate, toneForStatus, useToasts, type Column } from '../components/ui';
 
@@ -76,6 +76,72 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
   const secretInputRef = useRef<HTMLInputElement>(null);
 
   const [notifs, setNotifs] = useState<NotifPrefs>(() => loadNotifs());
+
+  // --- security policies (demo — saved locally + audited) ---
+  const [secSessionTimeout, setSecSessionTimeout] = useState('30');
+  const [secMfa, setSecMfa] = useState(true);
+  const [secAllowlist, setSecAllowlist] = useState('');
+  // --- SSO (mock config — no real IdP is contacted) ---
+  const [ssoProvider, setSsoProvider] = useState<'okta' | 'entra' | 'none'>('okta');
+  const [ssoIssuer, setSsoIssuer] = useState('');
+  const [ssoClientId, setSsoClientId] = useState('');
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoError, setSsoError] = useState<string | null>(null);
+  // --- webhooks ---
+  const [whUrl, setWhUrl] = useState('');
+  const [whEvents, setWhEvents] = useState<string[]>(['evidence.package.signed']);
+  const [whError, setWhError] = useState<string | null>(null);
+  const [whTesting, setWhTesting] = useState<string | null>(null);
+  const [deletingWebhook, setDeletingWebhook] = useState<string | null>(null);
+  const tenantWebhooks = store.webhooks.filter((w) => w.tenant_id === tenantId);
+
+  function saveSecurityPolicies() {
+    recordAudit({
+      actor, tenant_id: tenantId, action: 'settings.security.updated', target: tenantId,
+      detail: `Session timeout ${secSessionTimeout} min · MFA ${secMfa ? 'required' : 'optional'} · IP allowlist ${secAllowlist.trim() ? 'set' : 'open'} (demo — enforced at deploy)`,
+      result: 'success',
+    });
+    push({ title: 'Security policies saved (demo)', body: 'Policies are recorded in the audit log; enforcement lands with the live identity stack.', tone: 'ok' });
+  }
+
+  function saveSso() {
+    if (ssoEnabled && ssoProvider !== 'none') {
+      if (!/^https:\/\//.test(ssoIssuer.trim())) {
+        setSsoError('Issuer URL must start with https://.');
+        return;
+      }
+      if (!ssoClientId.trim()) {
+        setSsoError('Client ID is required when SSO is enabled.');
+        return;
+      }
+    }
+    setSsoError(null);
+    recordAudit({
+      actor, tenant_id: tenantId, action: 'settings.sso.updated', target: tenantId,
+      detail: ssoEnabled ? `SSO via ${ssoProvider} (issuer ${ssoIssuer.trim()}) — mock config, no IdP contacted` : 'SSO disabled (demo)',
+      result: 'success',
+    });
+    push({ title: 'SSO configuration saved (demo)', body: ssoEnabled ? `${ssoProvider} configured as mock IdP — no real federation occurs in this demo.` : 'SSO disabled.', tone: 'ok' });
+  }
+
+  async function submitCreateWebhook() {
+    if (!/^https:\/\//.test(whUrl.trim())) {
+      setWhError('Webhook URL must start with https://.');
+      return;
+    }
+    if (whEvents.length === 0) {
+      setWhError('Subscribe to at least one event.');
+      return;
+    }
+    setWhError(null);
+    try {
+      await api.createWebhook({ tenant_id: tenantId, url: whUrl.trim(), events: whEvents }, actor);
+      setWhUrl('');
+      push({ title: 'Webhook created', body: 'Deliveries are simulated in this demo — no network calls are made.', tone: 'ok' });
+    } catch {
+      push({ title: 'Webhook failed', body: 'The demo store rejected the webhook.', tone: 'err' });
+    }
+  }
 
   function updateProfile(patch: Partial<Profile>) {
     setProfileCache((prev) => ({ ...prev, [tenantId]: { ...profile, ...patch } }));
@@ -313,6 +379,150 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
         <button type="button" className="btn btn-primary" onClick={saveNotifs}>Save preferences</button>
       </div>
 
+      <div className="card" style={{ marginBottom: 14 }} data-testid="security-policies">
+        <h3>Security policies</h3>
+        <p className="muted">Tenant-level session and access policies. Saved to the demo audit log; enforced by the live identity stack at deploy — changing them here changes nothing about this demo session.</p>
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="sec-timeout">Session timeout (minutes)</label>
+            <select id="sec-timeout" className="select" value={secSessionTimeout} disabled={!settingsAllowed} onChange={(e) => setSecSessionTimeout(e.target.value)}>
+              <option value="15">15</option>
+              <option value="30">30</option>
+              <option value="60">60</option>
+              <option value="480">480 (8 hours)</option>
+            </select>
+          </div>
+          <div className="field">
+            <label className="row" style={{ fontWeight: 400 }}>
+              <input type="checkbox" checked={secMfa} disabled={!settingsAllowed} onChange={(e) => setSecMfa(e.target.checked)} />
+              <span><strong>Require MFA</strong> — <span className="muted">all tenant users must enroll a second factor (demo flag).</span></span>
+            </label>
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="sec-allowlist">IP allowlist (CIDR ranges, one per line — blank = open)</label>
+          <textarea id="sec-allowlist" className="input mono" rows={3} value={secAllowlist} disabled={!settingsAllowed}
+            onChange={(e) => setSecAllowlist(e.target.value)} placeholder="203.0.113.0/24" />
+          <span className="hint">Support view-as sessions and break-glass are always logged regardless of allowlist (demo note).</span>
+        </div>
+        <button type="button" className="btn btn-primary" disabled={!settingsAllowed} data-testid="sec-save" onClick={saveSecurityPolicies}>Save policies</button>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }} data-testid="sso-config">
+        <h3>Single sign-on (SSO)</h3>
+        <p className="muted">Mock IdP configuration. The login page's "Continue with Okta / Microsoft Entra (demo)" buttons mirror this choice; no real federation happens in the demo.</p>
+        <div className="grid-2">
+          <div className="field">
+            <label htmlFor="sso-provider">Provider</label>
+            <select id="sso-provider" className="select" value={ssoProvider} disabled={!settingsAllowed}
+              onChange={(e) => setSsoProvider(e.target.value as 'okta' | 'entra' | 'none')}>
+              <option value="okta">Okta</option>
+              <option value="entra">Microsoft Entra ID</option>
+              <option value="none">None (local accounts only)</option>
+            </select>
+          </div>
+          <div className="field">
+            <label className="row" style={{ fontWeight: 400 }}>
+              <input type="checkbox" checked={ssoEnabled} disabled={!settingsAllowed} onChange={(e) => setSsoEnabled(e.target.checked)} />
+              <span><strong>SSO enabled</strong> — <span className="muted">route sign-in through the IdP (demo flag).</span></span>
+            </label>
+          </div>
+          <div className="field">
+            <label htmlFor="sso-issuer">Issuer URL</label>
+            <input id="sso-issuer" className="input" value={ssoIssuer} disabled={!settingsAllowed}
+              onChange={(e) => setSsoIssuer(e.target.value)} placeholder="https://acme.okta.com" />
+          </div>
+          <div className="field">
+            <label htmlFor="sso-client">Client ID</label>
+            <input id="sso-client" className="input mono" value={ssoClientId} disabled={!settingsAllowed}
+              onChange={(e) => setSsoClientId(e.target.value)} placeholder="0oa…" />
+          </div>
+        </div>
+        {ssoError ? <span className="field-error">{ssoError}</span> : null}
+        <div className="row">
+          <button type="button" className="btn btn-primary" disabled={!settingsAllowed} data-testid="sso-save" onClick={saveSso}>Save SSO</button>
+          <button type="button" className="btn" disabled={!settingsAllowed}
+            onClick={() => push({ title: 'SSO test (demo)', body: `Simulated authorization-code round-trip to ${ssoIssuer.trim() || 'the configured issuer'} succeeded in 212 ms. No network call was made.`, tone: 'info' })}>
+            Test SSO (demo)
+          </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }} data-testid="webhooks">
+        <SectionTitle
+          title="Webhooks"
+          sub="Outbound event notifications (SIEM/Slack/your pipeline). Deliveries are simulated in this demo — endpoints are never actually called."
+        />
+        {tenantWebhooks.length === 0 ? (
+          <p className="muted">No webhooks for this tenant yet.</p>
+        ) : (
+          <ul className="list">
+            {tenantWebhooks.map((w) => (
+              <li key={w.webhook_id} data-testid={`webhook-${w.webhook_id}`}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <span>
+                    <span className="mono">{w.url}</span>{' '}
+                    <Pill tone={w.enabled ? 'ok' : 'neutral'}>{w.enabled ? 'enabled' : 'disabled'}</Pill>
+                    <br />
+                    <span className="muted">Events: {w.events.join(', ') || 'none'} · created {fmtDate(w.created_at)}</span>
+                    <br />
+                    <span className="muted">
+                      {w.last_delivery ? `Last delivery: HTTP ${w.last_delivery.status_code} · ${fmtDate(w.last_delivery.at)} (simulated)` : 'No deliveries yet'}
+                    </span>
+                  </span>
+                  <span className="row">
+                    <button type="button" className="btn btn-sm" disabled={whTesting === w.webhook_id || !keysAllowed}
+                      onClick={async () => {
+                        setWhTesting(w.webhook_id);
+                        try {
+                          const res = await api.testWebhook(w.webhook_id, actor);
+                          push({ title: 'Test event delivered (simulated)', body: res.message, tone: 'ok' });
+                        } finally {
+                          setWhTesting(null);
+                        }
+                      }}>
+                      {whTesting === w.webhook_id ? 'Sending…' : 'Send test event'}
+                    </button>
+                    <button type="button" className="btn btn-sm" disabled={!keysAllowed}
+                      onClick={() => void api.setWebhookEnabled(w.webhook_id, !w.enabled, actor)}>
+                      {w.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button type="button" className="btn btn-danger btn-sm" disabled={!keysAllowed}
+                      onClick={() => setDeletingWebhook(w.webhook_id)}>
+                      Delete
+                    </button>
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {keysAllowed ? (
+          <form onSubmit={(e) => { e.preventDefault(); void submitCreateWebhook(); }} style={{ marginTop: 12 }}>
+            <div className="field">
+              <label htmlFor="wh-url">Endpoint URL (https)</label>
+              <input id="wh-url" data-testid="webhook-url" className="input" value={whUrl} onChange={(e) => setWhUrl(e.target.value)} placeholder="https://hooks.example.com/evidia" />
+            </div>
+            <div className="field">
+              <span className="muted">Events</span>
+              <div className="checklist">
+                {['evidence.package.signed', 'evidence.package.exported', 'pipeline.run.completed', 'service.disabled', 'ontology.version.approved', 'tenant.offboard.completed'].map((ev) => (
+                  <label key={ev} className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <input type="checkbox" checked={whEvents.includes(ev)}
+                      onChange={(e) => setWhEvents((prev) => (e.target.checked ? [...prev, ev] : prev.filter((x) => x !== ev)))} />
+                    <span className="mono" style={{ fontSize: 12 }}>{ev}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {whError ? <span className="field-error">{whError}</span> : null}
+            <button type="submit" className="btn btn-primary" data-testid="webhook-create">Create webhook</button>
+          </form>
+        ) : (
+          <p className="muted">Managing webhooks requires the apikeys:manage permission (service-account surface).</p>
+        )}
+      </div>
+
       <div className="card">
         <h3>Danger zone</h3>
         <p className="muted">
@@ -407,6 +617,26 @@ export default function Settings({ tenantId, actor, role }: { tenantId: string; 
           danger
           onConfirm={() => void confirmRevoke()}
           onCancel={() => setRevoking(null)}
+        />
+      ) : null}
+
+      {deletingWebhook ? (
+        <ConfirmDialog
+          title="Delete webhook?"
+          body={
+            <span>
+              Webhook <span className="mono">{store.webhooks.find((w) => w.webhook_id === deletingWebhook)?.url}</span> will stop receiving events (demo). This cannot be undone.
+            </span>
+          }
+          confirmLabel="Delete webhook"
+          danger
+          onConfirm={async () => {
+            const id = deletingWebhook;
+            setDeletingWebhook(null);
+            await api.deleteWebhook(id, actor);
+            push({ title: 'Webhook deleted', body: 'Endpoint removed (demo).', tone: 'ok' });
+          }}
+          onCancel={() => setDeletingWebhook(null)}
         />
       ) : null}
     </section>

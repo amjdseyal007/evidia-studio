@@ -10,7 +10,7 @@ type UserRow = {
   email: string;
   role: Role;
   tenant_id: string;
-  status: 'active' | 'invited' | 'deactivated';
+  status: 'active' | 'invited' | 'suspended' | 'deactivated';
   cognito_groups: string[];
   last_login: string | null;
   created_at: string;
@@ -236,6 +236,24 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
     }
   }
 
+  async function handleResendInvite(user: UserRow) {
+    try {
+      await api.resendInvite(user.user_id, actor);
+      push({ title: 'Invite re-sent (demo)', body: `A fresh invitation was "sent" to ${user.email} — no email leaves this browser.`, tone: 'ok' });
+    } catch {
+      push({ title: 'Resend failed', body: 'The demo store rejected the resend.', tone: 'err' });
+    }
+  }
+
+  async function handleSuspend(user: UserRow) {
+    try {
+      await api.setUserStatus(user.user_id, 'suspended', actor);
+      push({ title: 'User suspended', body: `${user.name} is suspended — sign-in paused until reactivated (demo).`, tone: 'warn' });
+    } catch {
+      push({ title: 'Suspend failed', body: 'The demo store rejected the status change.', tone: 'err' });
+    }
+  }
+
   async function confirmDeactivate() {
     if (!deactivating) return;
     try {
@@ -435,16 +453,30 @@ export default function Users({ tenantId, actor, role }: { tenantId: string; act
             ))}
           </select>
           {manageAllowed ? (
-            r.status === 'deactivated' ? (
-              <button type="button" className="btn btn-sm" onClick={() => void handleReactivate(r)}>Reactivate</button>
+            r.status === 'deactivated' || r.status === 'suspended' ? (
+              <button type="button" className="btn btn-sm" data-testid={`user-reactivate-${r.user_id}`} onClick={() => void handleReactivate(r)}>Reactivate</button>
+            ) : r.status === 'invited' ? (
+              <>
+                <button type="button" className="btn btn-sm" data-testid={`user-resend-${r.user_id}`} onClick={() => void handleResendInvite(r)}>Resend invite</button>
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  onClick={() => setDeactivating(store.users.find((u) => u.user_id === r.user_id) ?? null)}
+                >
+                  Deactivate
+                </button>
+              </>
             ) : (
-              <button
-                type="button"
-                className="btn btn-danger btn-sm"
-                onClick={() => setDeactivating(store.users.find((u) => u.user_id === r.user_id) ?? null)}
-              >
-                Deactivate
-              </button>
+              <>
+                <button type="button" className="btn btn-sm" data-testid={`user-suspend-${r.user_id}`} onClick={() => void handleSuspend(r)}>Suspend</button>
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  onClick={() => setDeactivating(store.users.find((u) => u.user_id === r.user_id) ?? null)}
+                >
+                  Deactivate
+                </button>
+              </>
             )
           ) : null}
         </span>

@@ -184,3 +184,17 @@ a { color: var(--brand-dark); }
 .catalog-card.is-off { opacity: .62; }
 .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 13px; }
 .kv dt { color: var(--slate-500); } .kv dd { margin: 0; }
+
+/* --- console completion pass --- */
+.lifecycle-steps { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.lifecycle-steps li { border: 1px solid var(--line, #dde3ec); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; }
+.lifecycle-steps li.lc-done { background: #e2f4ec; color: #12805c; }
+.lifecycle-steps li.lc-current { background: #e8eeff; color: #2f5cff; font-weight: 650; }
+.lifecycle-steps li.lc-todo { color: #667085; }
+details > summary { cursor: pointer; padding: 6px 0; }
+.modal:focus { outline: none; }
+@media (max-width: 560px) {
+  .card-grid { grid-template-columns: 1fr; }
+  .content { padding: 14px; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
+}

@@ -35,7 +35,7 @@ export interface UserRecord {
    *  is the role shown for this user and its permission set applies. */
   custom_role_id?: string | null;
   tenant_id: string;
-  status: 'active' | 'invited' | 'deactivated';
+  status: 'active' | 'invited' | 'suspended' | 'deactivated';
   cognito_groups: string[];
   last_login: string | null;
   created_at: string;
@@ -70,6 +70,12 @@ export interface PipelineRun {
 }
 
 export type ConnectorCapability = 'pushdown' | 'virtual' | 'incremental' | 'cdc';
+/** Source-field → OMOP mapping row (connector setup wizard, step 3). */
+export interface FieldMapping {
+  source_field: string;
+  omop_domain: string;
+  target_concept: string;
+}
 export interface ConnectorRecord {
   connector_id: string;
   tenant_id: string;
@@ -80,6 +86,8 @@ export interface ConnectorRecord {
   enabled: boolean;
   capabilities: ConnectorCapability[];
   config: Record<string, string>;
+  /** Source fields mapped to OMOP domains/concepts at setup time. */
+  field_mappings: FieldMapping[];
   /** Catalog metadata (connector catalog): packaged version. */
   version: string;
   /** Data-handling disclosure: what crosses the tenant boundary. */
@@ -226,10 +234,10 @@ export const pipelineRunSeed: PipelineRun[] = [
 ];
 
 export const connectorSeed: ConnectorRecord[] = [
-  { connector_id: 'conn-snowflake-acme', tenant_id: 'acme_rare', name: 'Acme Snowflake warehouse', type: 'snowflake', mode: 'land', status: 'connected', enabled: true, capabilities: ['pushdown', 'incremental'], config: { account: 'acme-rare.us-east-1', warehouse: 'EVIDIA_WH', database: 'RWE_PROD', secret_ref: 'evidia/tenants/acme_rare/snowflake (Secrets Manager)' }, version: '1.4.0', data_handling: 'LAND mode: queried rows land in the tenant S3 bronze prefix inside the tenant boundary. Credentials never leave Secrets Manager; only OMOP-harmonized outputs are readable by agents.', last_test: { at: '2026-10-08T07:30:00Z', ok: true, latency_ms: 388 }, created_at: '2026-09-20T10:00:00Z' },
-  { connector_id: 'conn-databricks-beacon', tenant_id: 'beacon_bio', name: 'Beacon Databricks workspace', type: 'databricks', mode: 'virtual', status: 'connected', enabled: true, capabilities: ['virtual', 'pushdown'], config: { workspace: 'beacon.cloud.databricks.com', catalog: 'rwe_catalog', secret_ref: 'evidia/tenants/beacon_bio/databricks (Secrets Manager)' }, version: '1.1.2', data_handling: 'VIRTUAL mode: data stays in the tenant Databricks workspace; Evidia issues Delta Sharing / SQL reads and receives aggregates + approved extracts only. No bulk copy crosses the boundary.', last_test: { at: '2026-10-08T08:12:00Z', ok: true, latency_ms: 441 }, created_at: '2026-09-30T09:00:00Z' },
-  { connector_id: 'conn-foundry-acme', tenant_id: 'acme_rare', name: 'Acme Foundry (ontology sync)', type: 'foundry', mode: 'virtual', status: 'unknown', enabled: false, capabilities: ['virtual'], config: { stack: 'acme.palantirfoundry.com', secret_ref: 'evidia/tenants/acme_rare/foundry (Secrets Manager)' }, version: '0.9.0', data_handling: 'VIRTUAL mode: ontology sync only — class/property metadata crosses to align the Foundry ontology with the approved Evidia ontology. No patient-level data moves.', last_test: null, created_at: '2026-10-05T13:00:00Z' },
-  { connector_id: 'conn-rest-beacon', tenant_id: 'beacon_bio', name: 'Beacon lab REST feed', type: 'rest', mode: 'land', status: 'error', enabled: true, capabilities: ['incremental'], config: { base_url: 'https://labs.beacon.example/api/v2', secret_ref: 'evidia/tenants/beacon_bio/labs-rest (Secrets Manager)' }, version: '2.0.1', data_handling: 'LAND mode: incremental pulls land in the tenant S3 bronze prefix. Payloads are de-identified at the silver gate before any agent can read them.', last_test: { at: '2026-10-06T21:58:00Z', ok: false, latency_ms: 1204 }, created_at: '2026-10-01T16:20:00Z' },
+  { connector_id: 'conn-snowflake-acme', tenant_id: 'acme_rare', name: 'Acme Snowflake warehouse', type: 'snowflake', mode: 'land', status: 'connected', enabled: true, capabilities: ['pushdown', 'incremental'], config: { account: 'acme-rare.us-east-1', warehouse: 'EVIDIA_WH', database: 'RWE_PROD', secret_ref: 'evidia/tenants/acme_rare/snowflake (Secrets Manager)' }, field_mappings: [{ source_field: 'DIAGNOSIS_CODE', omop_domain: 'Condition', target_concept: 'SNOMED CT standard concept' }, { source_field: 'PATIENT_DOB', omop_domain: 'Person', target_concept: 'year_of_birth (de-identified)' }], version: '1.4.0', data_handling: 'LAND mode: queried rows land in the tenant S3 bronze prefix inside the tenant boundary. Credentials never leave Secrets Manager; only OMOP-harmonized outputs are readable by agents.', last_test: { at: '2026-10-08T07:30:00Z', ok: true, latency_ms: 388 }, created_at: '2026-09-20T10:00:00Z' },
+  { connector_id: 'conn-databricks-beacon', tenant_id: 'beacon_bio', name: 'Beacon Databricks workspace', type: 'databricks', mode: 'virtual', status: 'connected', enabled: true, capabilities: ['virtual', 'pushdown'], config: { workspace: 'beacon.cloud.databricks.com', catalog: 'rwe_catalog', secret_ref: 'evidia/tenants/beacon_bio/databricks (Secrets Manager)' }, field_mappings: [{ source_field: 'lab_code', omop_domain: 'Measurement', target_concept: 'LOINC standard concept' }], version: '1.1.2', data_handling: 'VIRTUAL mode: data stays in the tenant Databricks workspace; Evidia issues Delta Sharing / SQL reads and receives aggregates + approved extracts only. No bulk copy crosses the boundary.', last_test: { at: '2026-10-08T08:12:00Z', ok: true, latency_ms: 441 }, created_at: '2026-09-30T09:00:00Z' },
+  { connector_id: 'conn-foundry-acme', tenant_id: 'acme_rare', name: 'Acme Foundry (ontology sync)', type: 'foundry', mode: 'virtual', status: 'unknown', enabled: false, capabilities: ['virtual'], config: { stack: 'acme.palantirfoundry.com', secret_ref: 'evidia/tenants/acme_rare/foundry (Secrets Manager)' }, field_mappings: [], version: '0.9.0', data_handling: 'VIRTUAL mode: ontology sync only — class/property metadata crosses to align the Foundry ontology with the approved Evidia ontology. No patient-level data moves.', last_test: null, created_at: '2026-10-05T13:00:00Z' },
+  { connector_id: 'conn-rest-beacon', tenant_id: 'beacon_bio', name: 'Beacon lab REST feed', type: 'rest', mode: 'land', status: 'error', enabled: true, capabilities: ['incremental'], config: { base_url: 'https://labs.beacon.example/api/v2', secret_ref: 'evidia/tenants/beacon_bio/labs-rest (Secrets Manager)' }, field_mappings: [{ source_field: 'result_value', omop_domain: 'Measurement', target_concept: 'value_as_number' }], version: '2.0.1', data_handling: 'LAND mode: incremental pulls land in the tenant S3 bronze prefix. Payloads are de-identified at the silver gate before any agent can read them.', last_test: { at: '2026-10-06T21:58:00Z', ok: false, latency_ms: 1204 }, created_at: '2026-10-01T16:20:00Z' },
 ];
 
 export const productSeed: ProductRecord[] = [
